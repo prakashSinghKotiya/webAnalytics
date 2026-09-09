@@ -2,7 +2,7 @@ import http from "http";
 import https from "https";
 import dns from "dns";
 export const checkUrl = (targetUrl, options = {}) => {
-  const { timeout = 10000, degradedThreshold = 3000, } = options; //destructuring and initializing def value if not provided
+  const { timeout = 10000, degradedThreshold = 3000, } = options; //dest ,initializing def value if not provided
 
   return new Promise((resolve) => {
     

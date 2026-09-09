@@ -69,7 +69,7 @@ try{
 
         const workerEventqueue = queue[region];
         console.log("workerEventqueue instance from controller ttfb :", workerEventqueue)
-        const job = await workerEventqueue.add("measure-ttfb-all", {   // addding data to queue
+        const job = await workerEventqueue.add("measure-ttfb-all", {   // addding job to queue (inside redis)
         targetUrl: body.url,
         roomId: roomId
        
