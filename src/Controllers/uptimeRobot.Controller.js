@@ -7,72 +7,67 @@ import {
 } from "../Services/uptimeScheduler.Service.js";
 
 
-// CREATE
+
+const ALLOWED_INTERVALS = new Set(["1m", "5m", "10m", "30m", "1h"]);
+const ALLOWED_STATUSES = new Set(["active", "paused"]);
+
+
 
 export const createMonitor = async (req, res) => {
-
     try {
-
-        const {
-            url,
-            interval = "5m"
-        } = req.body;
-
+        const { url, interval = "5m" } = req.body;
 
         if (!url) {
-
-            return res.status(400).json({
-                error: "URL is required"
-            });
-
+            return res.status(400).json({ error: "URL is required." });
         }
 
-
-        const allowedIntervals = [
-            "1m",
-            "5m",
-            "10m",
-            "30m",
-            "1h"
-        ];
-
-
-        if (!allowedIntervals.includes(interval)) {
-
-            return res.status(400).json({
-                error: "Invalid interval"
-            });
-
+        try {
+            new URL(url);
+        } catch (err) {
+            return res.status(400).json({ error: "Invalid URL format. Include http:// or https://" });
         }
 
-
-        const monitor =
-            await UptimeMonitor.create({
-                url,
-                interval,
-                status: "active"
+        if (!ALLOWED_INTERVALS.has(interval)) {
+            return res.status(400).json({ 
+                error: `Invalid interval. Allowed values are: ${[...ALLOWED_INTERVALS].join(", ")}` 
             });
+        }
+
+        const monitor = await UptimeMonitor.create({
+            url,
+            interval,
+            status: "active"
+        });
 
 
-        await createUptimeScheduler(
-            monitor
-        );
-
+        try {
+            await createUptimeScheduler(monitor);
+        } catch (schedulerError) {
+            await UptimeMonitor.findByIdAndDelete(monitor._id);
+            console.error(`[MonitorCreation] Scheduler failed, rollback successful for ${monitor._id}:`, schedulerError);
+            
+            return res.status(500).json({ 
+                error: "Failed to initialize the background scheduler. Please try again." 
+            });
+        }
 
         return res.status(201).json({
-            message: "Monitor created",
-            monitor
+            message: "Monitor created successfully",
+            monitor: {
+                id: monitor._id,
+                url: monitor.url,
+                interval: monitor.interval,
+                status: monitor.status
+            }
         });
-
 
     } catch (error) {
-
-        console.error(error);
-
+        
+        console.error("[MonitorCreation] Unexpected error:", error);
+        
         return res.status(500).json({
-            error: error.message
+            error: "An unexpected internal server error occurred."
         });
-
     }
 };
 
@@ -82,77 +77,55 @@ export const createMonitor = async (req, res) => {
 
 export const updateMonitor = async (req, res) => {
 
-    try {
-
-        const {
-            id
-        } = req.params;
+    try {   
+        const { id } = req.params;
+        const { url, interval , status } = req.body;
 
 
-        const {
-            url,
-            interval
-        } = req.body;
 
-
-        const monitor =
-            await UptimeMonitor.findById(id);
-
-
-        if (!monitor) {
-
-            return res.status(404).json({
-                error: "Monitor not found"
-            });
-
+        try{
+            new URL(url)
+        }
+        catch(err){
+            return res.status(400).json({ error: "Invalid URL format. Include http:// or https://" });
         }
 
-
-        if (url !== undefined) {
-            monitor.url = url;
+        if(!ALLOWED_INTERVALS.has(interval)){
+            return res.status(400).json({
+                error: `Invalid interval. Allowed values are: ${[...ALLOWED_INTERVALS].join(", ")}`
+            })
         }
 
+        if(!ALLOWED_STATUSES.has(status)){
+            return res.status(400).json({  error: `Invalid Status. `
+            })
+        }
 
-        if (interval !== undefined) {
+        const monitor = await UptimeMonitor.findByIdAndUpdate(id , {
+            url : url,
+            interval : interval,
+            status : status
+        } , {returnDocument : "after"}).lean()
 
-            const allowedIntervals = [
-                "1m",
-                "5m",
-                "10m",
-                "30m",
-                "1h"
-            ];
+        if (!monitor) { return res.status(404).json({  error: "Monitor not found"  }); }
 
 
-            if (!allowedIntervals.includes(interval)) {
+        
 
-                return res.status(400).json({
-                    error: "Invalid interval"
-                });
-
+           try {
+            if (monitor.status === "active") {
+                await updateUptimeScheduler(monitor);
+            }else if(monitor.status === "paused"){
+                await removeUptimeScheduler(monitor._id)
             }
 
+            } catch (schedulerError) {
+                console.error(`[MonitorUpdate] Scheduler sync failed for ${id}:`, schedulerError);
+                return res.status(500).json({ 
+                    error: "Database updated, but failed to sync the background timer. Please try again." 
+                }); }
 
-            monitor.interval = interval;
-        }
-
-
-        await monitor.save();
-
-
-        if (monitor.status === "active") {
-
-            await updateUptimeScheduler(
-                monitor
-            );
-
-        }
-
-
-        return res.status(200).json({
-            message: "Monitor updated",
-            monitor
-        });
+        return res.status(200).json({  message: "Monitor updated",  monitor });
 
 
     } catch (error) {
@@ -174,18 +147,14 @@ export const pauseMonitor = async (req, res) => {
 
     try {
 
-        const {
-            id
-        } = req.params;
+        const {    id } = req.params;
 
 
-        const monitor =
-            await UptimeMonitor.findById(id);
+        const monitor =  await UptimeMonitor.findById(id);
 
 
-        if (!monitor) {
-
-            return res.status(404).json({
+        if (!monitor) { 
+              return res.status(404).json({
                 error: "Monitor not found"
             });
 
@@ -227,26 +196,16 @@ export const resumeMonitor = async (req, res) => {
 
     try {
 
-        const {
-            id
-        } = req.params;
+        const {  id } = req.params;
+        const monitor = await UptimeMonitor.findById(id);
 
-
-        const monitor =
-            await UptimeMonitor.findById(id);
-
-
-        if (!monitor) {
-
-            return res.status(404).json({
+        if (!monitor) { 
+             return res.status(404).json({
                 error: "Monitor not found"
-            });
-
-        }
+            });      }
 
 
         monitor.status = "active";
-
         await monitor.save();
 
 

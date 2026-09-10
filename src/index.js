@@ -1,8 +1,12 @@
 import http from "http";
 import { app } from "./server.js";
 import { Server } from "socket.io";
+
+
 import { sendTtfbResult } from "./socket/ttfb/ttfb.socketevent.js";
 import { setupTtfbQueueResult } from "./socket/ttfb/ttfb.queueresult.js";
+import { sendUptimeResult } from "./socket/UptimeMonitor/uptime.socketevents.js";
+import { UptimeRobotEventHandler } from "./socket/UptimeMonitor/uptime.queueresult.js";
 
 const server = http.createServer(app);
 
@@ -24,6 +28,8 @@ io.on("connection", (socket) => {
 
     
     sendTtfbResult(io, socket);
+
+    sendUptimeResult(io, socket)
     
 
     socket.on("disconnect", () => {
@@ -32,6 +38,7 @@ io.on("connection", (socket) => {
 })
 
 setupTtfbQueueResult(io);
+UptimeRobotEventHandler(io)
 
 
 

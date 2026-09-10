@@ -9,10 +9,11 @@ const worker = new Worker("uptimeRobot-india", async (job) => {
 
         if (job.name !== "uptime-scheduler-event") { return;  }
 
-        if (!targeturl || !monitorId) {
-        throw new Error(`Invalid job data. MonitorId: ${monitorId}, URL: ${targeturl}`); }
-
+    
          const {targeturl , monitorId} = job.data
+         
+         if (!targeturl || !monitorId) { 
+        throw new Error(`Invalid job data. MonitorId: ${monitorId}, URL: ${targeturl}`); }
 
           try{
 
