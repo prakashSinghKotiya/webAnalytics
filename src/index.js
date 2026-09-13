@@ -12,7 +12,7 @@ const server = http.createServer(app);
 
 export const io = new Server( server, {
     cors: {
-        origin: "*",
+        origin: process.env.SOCKET_ORIGIN || "*" ,
         methods: ["GET", "POST"],
         Credential:true ,
     },
