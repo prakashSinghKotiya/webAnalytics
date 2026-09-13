@@ -5,16 +5,18 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/index.js",
-  "dev": "node --env-file=.env src/index.js"
+    "dev": "node --env-file=.env src/index.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "bullmq": "^6.3.4",
+    "chrome-launcher": "^1.2.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "ioredis": "^6.0.0",
     "it": "^1.1.1",
+    "lighthouse": "^13.4.1",
     "mongoose": "^9.9.4",
     "socket.io": "^4.8.3"
   }
