@@ -1,6 +1,6 @@
-import mongoose from "mongoose";
+import { model, Schema } from "mongoose";
 
-const uptimeMonitorSchema = new mongoose.Schema(
+const uptimeMonitorSchema = new Schema(
     {
         url: {
             type: String,
@@ -25,7 +25,4 @@ const uptimeMonitorSchema = new mongoose.Schema(
     }
 );
 
-export const UptimeMonitor = mongoose.model(
-    "UptimeMonitor",
-    uptimeMonitorSchema
-);
+export const UptimeMonitor = model( "UptimeMonitor", uptimeMonitorSchema );

@@ -1,13 +1,12 @@
-import { indiaUptimeRobotEvent } from "../../queue/uptime.QeventListner";
+import { indiaUptimeRobotEvent } from "../../queue/uptime.QeventListner.js"
 
 
 
  export const UptimeRobotEventHandler = (io  )=> {
 
-    UptimeRobotEventResult(indiaUptimeRobotEvent , io)
+    UptimeRobotEventResult( indiaUptimeRobotEvent , io)
         
     }
-
 
 
 
@@ -19,7 +18,7 @@ export const UptimeRobotEventResult = (event, io )=> {
         console.log("ttfb event listningg  RESULT :", returnvalue ,"jobId", jobId);
         const monitorid = returnvalue?.monitorId; 
    
-        const roomId = `uptime-monitor:${monitorid}`;
+        const roomId = `uptime-monitor:${monitorid}`; //socket room id 
    
         io.to(roomId).emit("uptimeCompleted", { jobId: jobId, roomid: roomId, result: returnvalue }); //sending the result to the specific socket room for the completed job
 

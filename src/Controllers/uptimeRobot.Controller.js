@@ -144,90 +144,99 @@ export const updateMonitor = async (req, res) => {
 // PAUSE
 
 export const pauseMonitor = async (req, res) => {
-
     try {
+        const { id } = req.params;
 
-        const {    id } = req.params;
-
-
-        const monitor =  await UptimeMonitor.findById(id);
-
-
-        if (!monitor) { 
-              return res.status(404).json({
-                error: "Monitor not found"
-            });
-
+        if (!id) {
+            return res.status(400).json({ error: "Monitor ID is required" });
         }
 
 
-        monitor.status = "paused";
+        const monitor = await UptimeMonitor.findById(id);
+        
+        if (!monitor) {
+            return res.status(404).json({ error: "Monitor not found" });
+        }
 
+        try {
+            await removeUptimeScheduler(monitor._id); 
+        } catch (error) {
+        
+            return res.status(500).json({ 
+                error: "Failed to pause the background scheduler. Please try again." 
+            });
+        }
+
+        
+        monitor.status = "paused";
         await monitor.save();
 
+        return res.status(200).json({ message: "Monitor paused", monitor }); 
 
-        await removeUptimeScheduler(
-            monitor._id
-        );
-
-
-        return res.status(200).json({
-            message: "Monitor paused",
-            monitor
-        });
-
-
-    } catch (error) {
-
-        console.error(error);
-
-        return res.status(500).json({
-            error: error.message
-        });
-
+    } catch (error) { 
+        console.error(error); 
+    
+        return res.status(500).json({ error: "An internal server error occurred." });
     }
 };
-
 
 
 // RESUME
 
 export const resumeMonitor = async (req, res) => {
-
     try {
-
-        const {  id } = req.params;
+        const { id } = req.params;
         const monitor = await UptimeMonitor.findById(id);
 
         if (!monitor) { 
              return res.status(404).json({
                 error: "Monitor not found"
-            });      }
+            });      
+        }
 
+        if (monitor.status === "active") {
+            return res.status(200).json({
+                message: "Monitor is already active",
+                monitor
+            });
+        }
 
+        // Store previous status in case we need to roll back
+        const previousStatus = monitor.status;
+        
+      
         monitor.status = "active";
         await monitor.save();
 
+        try {
+            
+            await createUptimeScheduler(monitor);  //   Starting the scheduler
+        } catch (schedulerError) {
+            //  Rollback if the scheduler fails to start
+            console.error("Failed to start scheduler, rolling back DB:", schedulerError);
+            monitor.status = previousStatus; // Revert to paused/stopped
+            await monitor.save();
+            
+            return res.status(500).json({
+                error: "Failed to start the monitoring process. Monitor remains paused."
+            });
+        }
 
-        await createUptimeScheduler(
-            monitor
-        );
 
 
         return res.status(200).json({
-            message: "Monitor resumed",
+            message: "Monitor resumed successfully",
             monitor
         });
 
 
     } catch (error) {
-
-        console.error(error);
-
+        console.error("Error resuming monitor:", error);
+        
+        // Do not expose raw error messages to the client in production
         return res.status(500).json({
-            error: error.message
+            error: "An internal server error occurred while resuming the monitor"
         });
-
     }
 };
 
@@ -236,50 +245,40 @@ export const resumeMonitor = async (req, res) => {
 // DELETE
 
 export const deleteMonitor = async (req, res) => {
-
     try {
+        const { id } = req.params;
 
-        const {
-            id
-        } = req.params;
-
-
-        const monitor =
-            await UptimeMonitor.findById(id);
-
+        const monitor = await UptimeMonitor.findById(id);
 
         if (!monitor) {
-
             return res.status(404).json({
                 error: "Monitor not found"
             });
-
         }
 
 
-        await removeUptimeScheduler(
-            monitor._id
-        );
+        try {
+            await removeUptimeScheduler(monitor._id);
+        } catch (schedulerError) {
+           
+            //not returnning we will delte it ayway from db , scheduler can be already dead 
+            console.warn(`Failed to remove scheduler for monitor ${id}, proceeding with DB deletion:`, schedulerError);
+        }
 
-
-        await UptimeMonitor.findByIdAndDelete(
-            id
-        );
-
+        
+        await monitor.deleteOne();
 
         return res.status(200).json({
-            message: "Monitor deleted"
+            message: "Monitor deleted successfully"
         });
-
 
     } catch (error) {
+        console.error("Error deleting monitor:", error);
 
-        console.error(error);
-
+    
         return res.status(500).json({
-            error: error.message
+            error: "An internal server error occurred while deleting the monitor"
         });
-
     }
 };
 
@@ -288,24 +287,20 @@ export const deleteMonitor = async (req, res) => {
 // GET
 
 export const getMonitors = async (req, res) => {
-
     try {
-
-        const monitors =
-            await UptimeMonitor.find()
-                .sort({ createdAt: -1 });
-
+        const monitors = await UptimeMonitor.find()
+            .sort({ createdAt: -1 })
+            .lean(); 
 
         return res.status(200).json({
             monitors
         });
 
-
     } catch (error) {
+        console.error("Error fetching monitors:", error);
 
         return res.status(500).json({
-            error: error.message
+            error: "An internal server error occurred while fetching monitors"
         });
-
     }
 };

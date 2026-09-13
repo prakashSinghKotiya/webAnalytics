@@ -18,10 +18,7 @@ export const io = new Server( server, {
     },
       allowsEIO3: true,
 });
-
-
   // setting up the queue event listener for ttfb queue result
-
 
 io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
@@ -39,8 +36,6 @@ io.on("connection", (socket) => {
 
 setupTtfbQueueResult(io);
 UptimeRobotEventHandler(io)
-
-
 
 
 const PORT = process.env.PORT || 5000

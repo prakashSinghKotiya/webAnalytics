@@ -24,13 +24,14 @@ const getInterval = (interval) => {
 export const createUptimeScheduler = async (monitor) => {
 
     const every = getInterval(monitor.interval);
+    console.log("MONITOR" ,monitor)
     
-    const schedulerId = `uptime-monitor:${monitor._id}`;
+    const schedulerId = `uptime-monitor:${monitor._id}`; // Uptime monitor model id
 
     const job = await uptimeMonitorQueue.upsertJobScheduler(  // see adding jobs inside that queue after every interval and worker will run immidately seeing a new job .
         schedulerId, 
 
-        { every },
+        { every },  // run after every interval
 
         {
             name: "uptime-scheduler-event",  // individual job (name) inside the main queue ie uptimeRobot-india

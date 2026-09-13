@@ -1,26 +1,28 @@
 import {Worker } from "bullmq";
-import connection from "../config/redis";
-import { checkUrl } from "../Services/uptimeChecker.Service";
+import connection from "../config/redis.js";
+import { checkUrl } from "../Services/uptimeChecker.Service.js";
 
 
 const worker = new Worker("uptimeRobot-india", async (job) => { 
 
-        console.log("Processing uptimeMonitor for :", job.data.targeturl);
+        console.log("Processing uptimeMonitor for :", job.data);
 
         if (job.name !== "uptime-scheduler-event") { return;  }
 
+        
+
     
-         const {targeturl , monitorId} = job.data
+         const {url , monitorId} = job.data
          
-         if (!targeturl || !monitorId) { 
-        throw new Error(`Invalid job data. MonitorId: ${monitorId}, URL: ${targeturl}`); }
+         if (!url || !monitorId) { 
+        throw new Error(`Invalid job data. MonitorId: ${monitorId}, URL: ${url}`); }
 
           try{
 
-        const result = await checkUrl(targeturl)
+        const result = await checkUrl(url)
         console.log("uptimeMonitor result:", result);
 
-        return {monitorId, targeturl , ...result}
+        return {monitorId, url , ...result}
 
 
     }catch (error) {

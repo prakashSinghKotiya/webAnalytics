@@ -4,7 +4,8 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+  "dev": "node --env-file=.env src/index.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

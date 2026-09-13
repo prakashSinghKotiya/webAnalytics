@@ -17,6 +17,8 @@ export const uptimeMonitorQueue = new Queue("uptimeRobot-india", {  //creating a
     defaultJobOptions,
 });
 
+// await uptimeMonitorQueue.obliterate({ force: true });
+// console.log("Uptime queue cleared");
 
 
 
