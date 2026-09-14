@@ -37,13 +37,11 @@ const worker = new Worker("uptimeRobot-india", async (job) => {
     } )
 
 
-    worker.on("completed", (job) => {
+ worker.on("completed", (job) => {
 
     console.log(
         `Uptime job ${job.id} completed`
-    );
-
-});
+    );});
 
 
 

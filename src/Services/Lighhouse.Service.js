@@ -9,7 +9,7 @@ export const lighthouseReport = async(url)=>{
 
     chrome = await chromeLauncher.launch({
         chromeFlags : [
-           '--headless',
+           '--headless',  // help running chrom in bg without ui
         '--no-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu', // Prevents GPU-related crashes on servers
@@ -24,7 +24,7 @@ export const lighthouseReport = async(url)=>{
         port : chrome.port, // this is how lighthouse is conneccted to chromelauncher using chromelauncher port 
         output : "json",  
         logLevel : "error",
-        onlyCategories: [     
+        onlyCategories: [       // fetch result related to this 
                 'performance',
                 'accessibility',
                 'best-practices',

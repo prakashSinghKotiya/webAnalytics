@@ -3,6 +3,7 @@ import cors from 'cors';
 import ttfbRoute from './Routes/ttfb.Route.js';
 import uptimeRobotRoute from './Routes/uptimeRobot.Routes.js';
 import { connectdb } from './config/db.mongoose.js';
+import LighthouseRoute from './Routes/Lighthouse.Route.js';
 
 
 
@@ -16,7 +17,7 @@ export const app = express()
 
 app.use(express.json())
 app.use(cors({
-    origin: '*',
+    origin:  process.env.CLIENT_ORIGIN  || '*',
     credentials: true,
 }))
 
@@ -28,6 +29,7 @@ app.get('/', (req, res) => {
 
 app.use('/ttfb', ttfbRoute);
 app.use('/uptime', uptimeRobotRoute);
+app.use('/lighthouse', LighthouseRoute);
 
 
 

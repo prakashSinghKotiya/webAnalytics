@@ -7,6 +7,7 @@ import { sendTtfbResult } from "./socket/ttfb/ttfb.socketevent.js";
 import { setupTtfbQueueResult } from "./socket/ttfb/ttfb.queueresult.js";
 import { sendUptimeResult } from "./socket/UptimeMonitor/uptime.socketevents.js";
 import { UptimeRobotEventHandler } from "./socket/UptimeMonitor/uptime.queueresult.js";
+import { LighthouseConnection } from "./socket/Lighthouse/Lighthouse.socketevent.js";
 
 const server = http.createServer(app);
 
@@ -27,6 +28,8 @@ io.on("connection", (socket) => {
     sendTtfbResult(io, socket);
 
     sendUptimeResult(io, socket)
+
+    LighthouseConnection(io , socket)
     
 
     socket.on("disconnect", () => {
