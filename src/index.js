@@ -8,6 +8,7 @@ import { setupTtfbQueueResult } from "./socket/ttfb/ttfb.queueresult.js";
 import { sendUptimeResult } from "./socket/UptimeMonitor/uptime.socketevents.js";
 import { UptimeRobotEventHandler } from "./socket/UptimeMonitor/uptime.queueresult.js";
 import { LighthouseConnection } from "./socket/Lighthouse/Lighthouse.socketevent.js";
+import { LighthouseResultHandler } from "./socket/Lighthouse/Lighthouse.queueresult.js";
 
 const server = http.createServer(app);
 
@@ -39,6 +40,7 @@ io.on("connection", (socket) => {
 
 setupTtfbQueueResult(io);
 UptimeRobotEventHandler(io)
+LighthouseResultHandler(io)
 
 
 const PORT = process.env.PORT || 5000

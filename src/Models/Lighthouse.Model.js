@@ -19,4 +19,4 @@ const LighthouseSchema = new Schema(
     }
 );
 
-export const Lighthouse = model( "UptimeMonitor", LighthouseSchema );
+export const Lighthouse = model( "Lighthouse", LighthouseSchema );

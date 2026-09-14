@@ -22,12 +22,23 @@ export const handleQueueEvent = (queueEvent, region, io) => {
 })
     }catch(e){
         console.log("Error in handleQueueEvent", e);
-        return res.status(500).json({
-            success: false,
-            message: "Failed to handle queue event",
-          });
+        
     }
 
 
 
 }
+
+
+
+// What happens in memory
+// When your server starts, setupTtfbQueueResult(io) executes once.
+
+// It runs handleQueueEvent 3 times to register 3 separate listeners:
+
+// Listener 1 subscribes to Redis for the "india" queue stream.
+// Listener 2 subscribes to Redis for the "europe" queue stream.
+// Listener 3 subscribes to Redis for the "usa" queue stream.
+
+// Once registered, that setup code is finished. Nothing is "running" or "checking."
+// once initialized they run for the whole time and run when a job is completed .

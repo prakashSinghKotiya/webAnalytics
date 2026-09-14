@@ -14,12 +14,12 @@ export const LighthouseResult = async(req ,res ,next)=>{
             return res.status(400).json({ error: "Invalid URL format. Include http:// or https://" });
         }
        
-    const lighthouseDb = Lighthouse.create({
+    const lighthouseDb = await Lighthouse.create({
         url : url
     })
         
 
-    const job = await Lighthouequeue.add("lighthouse-Work",{
+    const job = await Lighthouequeue.add("lighthouse-queue",{
         targetUrl: url,
         roomId :  lighthouseDb._id,
     } )
@@ -30,7 +30,7 @@ export const LighthouseResult = async(req ,res ,next)=>{
 
     }
 
-    return res.status(200).json({ message: "lighthouse is processing ", data : job })
+    return res.status(200).json({ message: "lighthouse is processing ", data : lighthouseDb , job })
 
     }catch(err){
         console.log(err)

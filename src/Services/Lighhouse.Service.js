@@ -38,8 +38,45 @@ export const lighthouseReport = async(url)=>{
             throw new Error('Lighthouse failed to generate report');
         }
 
+const {
+    requestedUrl,
+    fetchTime,
+    categories: {
+        performance,
+        accessibility,
+        "best-practices": bestPractices,
+        seo
+    },
+    audits: {
+        "first-contentful-paint": fcp,
+        "largest-contentful-paint": lcp,
+        "speed-index": speedIndex,
+        "total-blocking-time": tbt,
+        "cumulative-layout-shift": cls,
+        interactive
+    }  } = result.lhr;
 
-     return result.lhr;
+
+    return {
+    requestedUrl,
+    fetchTime,
+
+    scores: {
+        performance: Math.round(performance.score * 100),
+        accessibility: Math.round(accessibility.score * 100),
+        bestPractices: Math.round(bestPractices.score * 100),
+        seo: Math.round(seo.score * 100)
+    },
+
+    metrics: {
+        fcp: fcp.numericValue,
+        lcp: lcp.numericValue,
+        speedIndex: speedIndex.numericValue,
+        tbt: tbt.numericValue,
+        cls: cls.numericValue,
+        interactive: interactive.numericValue
+    }
+};
 
 
 
@@ -48,8 +85,15 @@ export const lighthouseReport = async(url)=>{
         console.error(`[Lighthouse Error] Failed to audit ${url}:`, error.message);
         throw new Error(`Audit failed for ${url}: ${error.message}`) 
    
-         } finally{
-        
-            if(chrome){ chrome.kill()}
+         } finally{ 
+            if (chrome) {
+             try {
+
+            chrome.kill();
+
+        } catch (error) {
+            console.error("Failed to cleanup Chrome:", error.message);
+        }
+    }
     }
 }
