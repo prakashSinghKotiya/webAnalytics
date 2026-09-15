@@ -18,7 +18,7 @@ export async function measureTTFB(targetUrl, timeoutMs = 20000) {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       },
     });
-    console.log("Response received:", response);
+   // console.log("Response received:", response);
 
     const end = performance.now();
     clearTimeout(timeoutId); // Prevent memory leaks
