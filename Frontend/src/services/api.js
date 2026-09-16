@@ -18,10 +18,7 @@ import axios from 'axios'
  * results themselves arrive over Socket.IO (see `./socket.js`).
  */
 
-export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(
-  /\/+$/,
-  '',
-)
+export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/+$/, '')
 
 /** Regions the TTFB queues are split into, plus the "ask all three" value. */
 export const REGIONS = ['india', 'europe', 'usa']
@@ -38,9 +35,14 @@ export const REGION_LABELS = {
 export const INTERVALS = ['1m', '5m', '10m', '30m', '1h']
 
 export const http = axios.create({
-  baseURL: API_URL,
+  baseURL: API_URL.replace(/\/+$/, '') + '/',
   timeout: 30_000,
   headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+})
+
+http.interceptors.request.use((config) => {
+  config.url = config.url?.replace(/^\/+/, '')
+  return config
 })
 
 // Hand back `response.data` so call sites work with the payload directly.
