@@ -6,13 +6,6 @@ const connection = {
 };
 
 
-
-connection.on("connect", () => {
-  console.log("Redis connected");
-});
-
-connection.on("error", (err) => {
-  console.error("Redis error:", err);
-});
+console.log("redis",  connection)
 
 export default connection;
