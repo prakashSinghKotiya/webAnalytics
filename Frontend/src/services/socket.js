@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client'
-import { AUTH_TOKEN_KEY } from './api'
+
+const AUTH_TOKEN_KEY = 'auth_token'
 
 
 export const SOCKET_URL = (
@@ -144,6 +145,60 @@ export function watchAnalysis(analysisId) {
 export function unwatchAnalysis(analysisId) {
   if (!analysisId) return
   emitSocketEvent(SOCKET_EVENTS.LEAVE_ROOM, { analysisId })
+}
+
+/** Event names emitted FROM the client TO the server. */
+export const EMIT = {
+  TTFB_JOB: 'ttfb-job',
+  TTFB_JOB_ALL: 'ttfb-job-global',
+  LIGHTHOUSE_JOB: 'Lighthouse-job',
+  UPTIME_JOB: 'uptime-job',
+}
+
+/** Event names emitted FROM the server TO the client. */
+export const ON = {
+  TTFB_COMPLETED: 'ttfbCompleted',
+  LIGHTHOUSE_COMPLETED: 'Lighthouse-completed',
+  LIGHTHOUSE_FAILED: 'Lighthouse-failed',
+  UPTIME_COMPLETED: 'uptimeCompleted',
+}
+
+/** Rooms the client has joined, keyed by a local string key. */
+const activeRooms = new Map()
+
+/**
+ * Joins a socket room if not already joined.
+ * `event` is the emit name, `payload` is the data, `key` is a local dedup key.
+ */
+export function joinRoom(event, payload, key) {
+  if (activeRooms.has(key)) return
+  const instance = getSocket({ autoConnect: true })
+  const doEmit = () => instance.emit(event, payload)
+  if (instance.connected) {
+    doEmit()
+  } else {
+    instance.once('connect', doEmit)
+  }
+  activeRooms.set(key, payload)
+}
+
+/** Leaves a room and removes it from the local tracking map. */
+export function leaveRoom(key) {
+  if (!activeRooms.has(key)) return
+  activeRooms.delete(key)
+}
+
+/**
+ * Removes all tracked rooms whose key starts with `prefix` EXCEPT those
+ * present in `keepSet`. Used to clean up stale uptime rooms when the monitor
+ * list changes.
+ */
+export function keepRooms(prefix, keepSet) {
+  for (const key of activeRooms.keys()) {
+    if (key.startsWith(prefix) && !keepSet.has(key)) {
+      activeRooms.delete(key)
+    }
+  }
 }
 
 export default { getSocket, connectSocket, disconnectSocket, subscribeToEvents }

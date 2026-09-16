@@ -29,7 +29,7 @@ const LIGHTHOUSE_TIMEOUT = 180_000
 /** Rooms are tracked under these local keys; the id part keeps runs apart. */
 const TTFB_ROOM = (roomId) => `ttfb:${roomId}`
 const LIGHTHOUSE_ROOM = (roomId) => `lighthouse:${roomId}`
-const UPTIME_ROOM = (monitorId) => `uptime:${monitorId}`
+const UPTIME_ROOM = (monitorId) => `uptime-monitor:${monitorId}`
 
 const initialTtfb = {
   status: 'idle', // idle | running | done | error
@@ -78,19 +78,20 @@ export function AnalysisProvider({ children }) {
   /* --------------------------------------------------------- realtime wiring */
 
   useEffect(() => {
-    const socket = getSocket()
+    const socket = getSocket({ autoConnect: true })
 
     const onConnect = () => setConnection('online')
     const onDisconnect = () => setConnection('offline')
     const onConnectError = () => setConnection('offline')
 
+    // backend sends: { jobId, roomId, result, region }
     const onTtfbCompleted = ({ roomId, jobId, result = {}, region: eventRegion } = {}) => {
-      const key = result.region ?? eventRegion
+      const key = eventRegion  // region is top-level, not inside result
       if (!key) return
 
       setTtfb((prev) => {
-        if (!prev.roomId || prev.roomId !== roomId) return prev // an older run
-        if (prev.results[key]) return prev // duplicate event
+        if (!prev.roomId || prev.roomId !== roomId) return prev
+        if (prev.results[key]) return prev
         const results = { ...prev.results, [key]: { ...result, region: key, jobId } }
         const pending = prev.pending.filter((item) => item !== key)
         return {
@@ -103,10 +104,10 @@ export function AnalysisProvider({ children }) {
       })
     }
 
-    const onLighthouseCompleted = ({ result = {} } = {}) => {
-      const roomId = result.roomId ? String(result.roomId) : null
+    // backend sends: { jobId, result } — match by jobId since result has no roomId
+    const onLighthouseCompleted = ({ jobId, result = {} } = {}) => {
       setLighthouse((prev) => {
-        if (!roomId || prev.roomId !== roomId) return prev
+        if (!prev.jobId || String(prev.jobId) !== String(jobId)) return prev
         return { ...prev, status: 'done', report: result, error: null, finishedAt: Date.now() }
       })
     }
@@ -123,7 +124,7 @@ export function AnalysisProvider({ children }) {
       })
     }
 
-    // Uptime results are keyed by monitor, so an event is always safe to apply.
+    // backend sends: { jobId, roomid, result } — monitorId is inside result
     const onUptimeCompleted = ({ result = {} } = {}) => {
       const monitorId = result.monitorId ? String(result.monitorId) : null
       if (!monitorId) return
@@ -208,7 +209,7 @@ export function AnalysisProvider({ children }) {
       keys.add(key)
       joinRoom(EMIT.UPTIME_JOB, { monitorId }, key)
     })
-    keepRooms('uptime:', keys)
+    keepRooms('uptime-monitor:', keys)
   }, [uptime.monitors])
 
   /* -------------------------------------------------------------------- ttfb */

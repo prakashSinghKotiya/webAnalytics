@@ -5,7 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --env-file=.env src/index.js"
+    "dev": "node --env-file=.env src/index.js",
+    "worker": "node --env-file=.env src/Workers/ttfbStart.Worker.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
