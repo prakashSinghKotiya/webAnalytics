@@ -1,83 +1,149 @@
 import { io } from 'socket.io-client'
+import { AUTH_TOKEN_KEY } from './api'
 
-/**
- * Socket.IO client for the backend in `../Backend/src/socket`.
- *
- * A single connection is shared by the whole app. Rooms are created by the
- * server when we emit a "job" event, and results are broadcast back into that
- * room — there is no polling route for job results.
- */
 
 export const SOCKET_URL = (
   import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000'
 ).replace(/\/+$/, '')
 
-/** Client -> server. Each one joins this socket to the room it carries. */
-export const EMIT = {
-  TTFB_JOB: 'ttfb-job', // { roomId }        single region
-  TTFB_JOB_ALL: 'ttfb-job-global', // { roomId }        all regions
-  LIGHTHOUSE_JOB: 'Lighthouse-job', // { roomId }        roomId is the report _id
-  UPTIME_JOB: 'uptime-job', // { monitorId }     server names the room itself
+/** Event names shared with the backend. Keep in sync with the server emitter. */
+export const SOCKET_EVENTS = {
+  CONNECT: 'connect',
+  DISCONNECT: 'disconnect',
+  CONNECT_ERROR: 'connect_error',
+  RECONNECT: 'reconnect',
+
+  ANALYSIS_STARTED: 'analysis:started',
+  ANALYSIS_PROGRESS: 'analysis:progress',
+  ANALYSIS_COMPLETE: 'analysis:complete',
+  ANALYSIS_ERROR: 'analysis:error',
+  ANALYSIS_HISTORY: 'analysis:history',
+
+  TTFB_UPDATE: 'ttfb:update',
+  LIGHTHOUSE_UPDATE: 'lighthouse:update',
+  UPTIME_UPDATE: 'uptime:update',
+
+  JOIN_ROOM: 'analysis:join',
+  LEAVE_ROOM: 'analysis:leave',
 }
 
-/** Server -> client. */
-export const ON = {
-  TTFB_COMPLETED: 'ttfbCompleted', // { jobId, roomId, result, region }
-  LIGHTHOUSE_COMPLETED: 'Lighthouse-completed', // { jobId, result }
-  LIGHTHOUSE_FAILED: 'Lighthouse-failed', // { jobId, error }
-  UPTIME_COMPLETED: 'uptimeCompleted', // { jobId, roomid, result }
+/** Events the context layer listens to on every connection. */
+export const ANALYSIS_EVENTS = [
+  SOCKET_EVENTS.ANALYSIS_STARTED,
+  SOCKET_EVENTS.ANALYSIS_PROGRESS,
+  SOCKET_EVENTS.ANALYSIS_COMPLETE,
+  SOCKET_EVENTS.ANALYSIS_ERROR,
+  SOCKET_EVENTS.ANALYSIS_HISTORY,
+  SOCKET_EVENTS.TTFB_UPDATE,
+  SOCKET_EVENTS.LIGHTHOUSE_UPDATE,
+  SOCKET_EVENTS.UPTIME_UPDATE,
+]
+
+function readAuthToken() {
+  try {
+    return window.localStorage.getItem(AUTH_TOKEN_KEY)
+  } catch {
+    return null
+  }
 }
 
 let socket = null
 
-/** Rooms we have joined, so they can be re-joined after a reconnect. */
-const rooms = new Map()
-
-/** Returns the shared socket, creating the connection on first use. */
-export function getSocket() {
+/**
+ * Returns the shared socket, creating it on first use.
+ * Pass `{ autoConnect: false }` to prepare it without opening a connection.
+ */
+export function getSocket({ autoConnect = false } = {}) {
   if (socket) return socket
 
+  const token = readAuthToken()
+
   socket = io(SOCKET_URL, {
+    autoConnect,
     transports: ['websocket', 'polling'],
     withCredentials: true,
-  })
-
-  // Room membership lives on the server's socket, so it is lost on reconnect.
-  socket.on('connect', () => {
-    rooms.forEach(({ event, payload }) => socket.emit(event, payload))
+    auth: token ? { token } : undefined,
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1_000,
+    reconnectionDelayMax: 10_000,
+    randomizationFactor: 0.5,
+    timeout: 10_000,
   })
 
   return socket
 }
 
+/** Opens the connection (safe to call repeatedly). */
+export function connectSocket({ token } = {}) {
+  const instance = getSocket()
+  if (token) instance.auth = { token }
+  if (!instance.connected) instance.connect()
+  return instance
+}
+
+/** Closes the connection and prevents automatic reconnection. */
+export function disconnectSocket() {
+  if (!socket) return
+  socket.removeAllListeners()
+  socket.disconnect()
+  socket = null
+}
+
+export function isSocketConnected() {
+  return Boolean(socket?.connected)
+}
+
 /**
- * Joins a room and remembers it for reconnects.
+ * Subscribes to a map of `{ event: handler }` and returns a single cleanup
+ * function, which makes it a drop-in return value for a `useEffect`.
  *
- * `key` identifies the room locally: joining the same key twice is a no-op, so
- * it is safe to call from an effect that re-runs.
+ *   useEffect(() => subscribeToEvents({ 'analysis:progress': onProgress }), [])
  */
-export function joinRoom(event, payload, key) {
-  const roomKey = key ?? `${event}:${payload?.roomId ?? payload?.monitorId}`
-  if (rooms.has(roomKey)) return roomKey
+export function subscribeToEvents(handlers, target = getSocket()) {
+  const entries = Object.entries(handlers).filter(([, handler]) => typeof handler === 'function')
+  entries.forEach(([event, handler]) => target.on(event, handler))
 
-  rooms.set(roomKey, { event, payload })
-  getSocket().emit(event, payload)
-  return roomKey
+  return () => {
+    entries.forEach(([event, handler]) => target.off(event, handler))
+  }
 }
 
-/**
- * Forgets a room. The server exposes no "leave" event, so this only stops us
- * re-joining it on reconnect — stale events are ignored by the consumers,
- * which match on the room/monitor id they are currently showing.
- */
-export function leaveRoom(key) {
-  rooms.delete(key)
+/** Fire-and-forget emit that no-ops when the socket is offline. */
+export function emitSocketEvent(event, payload) {
+  const instance = getSocket()
+  if (!instance.connected) return false
+  instance.emit(event, payload)
+  return true
 }
 
-/** Forgets every room whose key starts with `prefix`, except the ones in `keep`. */
-export function keepRooms(prefix, keep) {
-  rooms.forEach((_payload, key) => {
-    if (key.startsWith(prefix) && !keep.has(key)) rooms.delete(key)
+/** Emit and wait for the server acknowledgement (with a timeout). */
+export function emitWithAck(event, payload, { timeout = 10_000 } = {}) {
+  const instance = getSocket()
+
+  if (!instance.connected) {
+    return Promise.reject(new Error(`Socket is not connected, cannot emit "${event}"`))
+  }
+
+  return new Promise((resolve, reject) => {
+    instance.timeout(timeout).emit(event, payload, (err, response) => {
+      if (err) reject(new Error(`"${event}" timed out after ${timeout}ms`))
+      else resolve(response)
+    })
   })
 }
 
+/** Joins a per-analysis room so progress events are scoped to one run. */
+export function watchAnalysis(analysisId) {
+  return emitWithAck(SOCKET_EVENTS.JOIN_ROOM, { analysisId }, { timeout: 5_000 }).catch(
+    () => null,
+  )
+}
+
+/** Leaves the room created by `watchAnalysis`. */
+export function unwatchAnalysis(analysisId) {
+  if (!analysisId) return
+  emitSocketEvent(SOCKET_EVENTS.LEAVE_ROOM, { analysisId })
+}
+
+export default { getSocket, connectSocket, disconnectSocket, subscribeToEvents }
