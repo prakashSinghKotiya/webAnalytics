@@ -4,7 +4,7 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node --watch --no-deprecation --env-file=.env src/index.js",
+    "start": "node --watch --no-deprecation src/index.js",
     "dev": "node  --env-file=.env src/index.js",
     "worker": "node --watch --no-deprecation --env-file=.env src/Workers/ttfbStart.Worker.js"
   },
