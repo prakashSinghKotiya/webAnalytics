@@ -10,6 +10,8 @@ import { UptimeRobotEventHandler } from "./socket/UptimeMonitor/uptime.queueresu
 import { LighthouseConnection } from "./socket/Lighthouse/Lighthouse.socketevent.js";
 import { LighthouseResultHandler } from "./socket/Lighthouse/Lighthouse.queueresult.js";
 
+import "./Workers/ttfbStart.worker.js"
+
 const server = http.createServer(app);
 
 export const io = new Server( server, {
