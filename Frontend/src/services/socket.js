@@ -5,7 +5,7 @@ const AUTH_TOKEN_KEY = 'auth_token'
 
 export const SOCKET_URL = (
   import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000'
-).replace(/\/+$/, '')
+)
 
 /** Event names shared with the backend. Keep in sync with the server emitter. */
 export const SOCKET_EVENTS = {

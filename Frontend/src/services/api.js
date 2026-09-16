@@ -18,7 +18,7 @@ import axios from 'axios'
  * results themselves arrive over Socket.IO (see `./socket.js`).
  */
 
-export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/+$/, '')
+export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000')
 
 /** Regions the TTFB queues are split into, plus the "ask all three" value. */
 export const REGIONS = ['india', 'europe', 'usa']
