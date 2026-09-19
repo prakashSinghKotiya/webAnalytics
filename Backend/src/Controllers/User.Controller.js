@@ -137,7 +137,7 @@ export const userDetails = async(req, res)=>{
 
     
     res.status(200).json({
-        name : user.name, //see here we are using req.user that we have set in authentication and getting userdetail easily
+        name : user.name, 
         email: user.email,
         picture: user.picture,
         plan : user.plans
@@ -147,26 +147,64 @@ export const userDetails = async(req, res)=>{
 
 }
 
-export const getAllUsers = async(req, res)=>{  //rbac get all user endpoint controller 
-    const allUsers = await User.find({deleted : false }).lean() //only user that is not deleted will be fetched 
-    //const session = await Session.find().lean()
-    const keys = await redisDb.keys("session:*");
-    console.log("redis",keys);
-    const session= await Promise.all(keys.map((key) => redisDb.json.get(key))
-);
-    const activeSession = session.map(({userId})=> userId.toString()) // because of object id we have to conver it in string 
-    const allSessionSet = new Set(activeSession) // this is creating  an set of all active session can say an array of allsession
+export const getAllUsers = async (req, res) => {
+    try {
+        
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10)); 
+        const skip = (page - 1) * limit;
 
-    const gettingUsers = allUsers.map(({_id,email,name}) =>({
-        id:_id,
-        name ,
-        email,
-        isLogedin : allSessionSet.has(_id.toString()) // creating an extra property if user session is not there it will be false els true 
-    })) 
-     res.status(200).json( gettingUsers)
-   
+      
+        const [users, totalUsers] = await Promise.all([
+            User.find({ deleted: false })
+                .select('_id name email role') 
+                .skip(skip)
+                .limit(limit)
+                .lean() ,
+            User.countDocuments({ deleted: false })
+        ]);
 
-}
+       
+        const totalPages = Math.ceil(totalUsers / limit);
+
+    
+        if (!users || users.length === 0) {
+            return res.status(200).json({
+                success: true,
+                data: [],
+                pagination: {
+                    currentPage: page,
+                    totalPages: 0,
+                    totalUsers: 0,
+                    limit,
+                    hasNextPage: false,
+                    hasPrevPage: false
+                }
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: users,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalUsers,
+                limit,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
+        });
+
+    } catch (error) {
+        console.error("Error fetching users:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error while fetching users.",
+            error: process.env.NODE_ENV === "development" ? error.message : undefined
+        });
+    }
+};
 
 export const adminPowerlogout = async(req,res,next)=>{ //rbac
   try {
@@ -178,20 +216,18 @@ export const adminPowerlogout = async(req,res,next)=>{ //rbac
     next(error)
     }}
 
+
+
 export const DeleteUser = async(req,res,next)=>{ //rbac
-  
-    
+
       const {userId} = req.params
       if(req.user._id.toString()  === userId){  //disabling self delete 
         return res.status(403).json({error : "you cannot delete yourself" }) 
       } 
 
         try {
-     // await User.findByIdAndDelete({_id : userId})          this was hard delete we will implement soft delete
-     // await File.deleteMany({userId})
-     // await Directory.deleteMany({userId})
       await Session.deleteMany({userId})
-      await findByIdAndUpdate(userId , { deleted : true}) //soft delete so we can recover the data if user wants to 
+      await User.findByIdAndUpdate(userId , { deleted : true}) //soft delete 
     
   } catch (error) {
     next(error)
@@ -202,7 +238,6 @@ export const logout = async (req, res)=>{
     const{sid} = req.signedCookies
     await Session.findByIdAndDelete(sid)  
 
- await redisDb.del(`session:${sid}`)
     res.clearCookie("sid") // this will clear the coookie ie the user id we have set and user will be logout
     res.status(204).end();
 }
