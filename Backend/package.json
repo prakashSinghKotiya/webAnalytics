@@ -14,11 +14,17 @@
     "chrome-launcher": "^1.2.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
+    "dompurify": "^3.4.15",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0",
+    "express-slow-down": "^3.1.1",
     "ioredis": "^6.0.0",
     "it": "^1.1.1",
+    "jsdom": "^29.1.1",
     "lighthouse": "^13.4.1",
     "mongoose": "^9.9.4",
-    "socket.io": "^4.8.3"
+    "nodemailer": "^10.0.10",
+    "socket.io": "^4.8.3",
+    "zod": "^4.6.5"
   }
 }
