@@ -5,6 +5,11 @@ import uptimeRobotRoute from './Routes/uptimeRobot.Routes.js';
 import { connectdb } from './config/db.mongoose.js';
 import LighthouseRoute from './Routes/Lighthouse.Route.js';
 
+import  UserRoutes from "./Routes/User.Routes.js"
+import  AuthRoutes from "./Routes/Auth.Routes.js"
+import  AdminRoutes from "./Routes/Admin.Routes.js"
+import checkAuth from './Middleware/authentication.Mw.js';
+
 
 
 
@@ -26,10 +31,13 @@ app.get('/', (req, res) => {
 })
 
 
+app.use("/user", UserRoutes) 
+app.use("/auth", AuthRoutes)
+app.use("/admin", AdminRoutes)
 
-app.use('/ttfb', ttfbRoute);
-app.use('/uptime', uptimeRobotRoute);
-app.use('/lighthouse', LighthouseRoute);
+app.use('/ttfb',checkAuth, ttfbRoute);
+app.use('/uptime',checkAuth, uptimeRobotRoute);
+app.use('/lighthouse',checkAuth, LighthouseRoute);
 
 
 

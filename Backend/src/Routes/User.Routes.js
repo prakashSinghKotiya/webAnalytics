@@ -1,6 +1,7 @@
 import express from "express"
 import checkAuth from "../Middleware/authentication.Mw"
 import { loginUser, logout, registerUser, userDetails } from "../Controllers/User.Controller"
+import { registerLimiter, requstThrottling } from "../Validators/RateLimiting"
 
 
 
@@ -9,9 +10,9 @@ import { loginUser, logout, registerUser, userDetails } from "../Controllers/Use
 const router = express.Router()
 
 
-router.post("/register", registerUser)
+router.post("/register",registerLimiter,requstThrottling, registerUser)
 
-router.post("/login",loginUser )
+router.post("/login",registerLimiter,requstThrottling ,loginUser )
 
 router.get("/home",checkAuth, userDetails)
 
