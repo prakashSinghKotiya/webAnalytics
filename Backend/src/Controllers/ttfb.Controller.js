@@ -1,3 +1,4 @@
+import { Ttfb } from "../Models/Ttfb.Model.js";
 import { europeTtfbQueue, indiaTtfbQueue, usaTtfbQueue } from "../queue/ttfb.queue.js";
 import crypto from "crypto";
 
@@ -22,6 +23,7 @@ try{
     if (!workerEventqueue) {
         return res.status(400).json({ error: "Invalid region" });
     }
+    const ttfb = await Ttfb.create({userId: req.user._id , url : body.url, region : body.region})
 
   const job = await workerEventqueue.add("measure-ttfb", {   // addding data to queue
       targetUrl: body.url,
@@ -62,8 +64,12 @@ try{
         return res.status(400).json({ error: "Invalid 'region' in request body" });
     }
 
+    const regions = ["india", "europe", "usa"]
+
     const roomId = crypto.randomUUID();
     const jobid = []
+
+    await Ttfb.create({userId: req.user._id , url : body.url, region : regions})
 
     for(const region of Object.keys(queue)) {
 

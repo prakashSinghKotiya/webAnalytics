@@ -2,6 +2,15 @@ import { model, Schema } from "mongoose";
 
 const uptimeMonitorSchema = new Schema(
     {
+
+         
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+            },
+            
         url: {
             type: String,
             required: true,
@@ -18,7 +27,7 @@ const uptimeMonitorSchema = new Schema(
             type: String,
             enum: ["active", "paused"],
             default: "active"
-        }
+        },
     },
     {
         timestamps: true
