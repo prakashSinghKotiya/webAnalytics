@@ -16,9 +16,9 @@ export const handleQueueEvent = (queueEvent, region, io) => {
     console.log("ttfb event listningg ", returnvalue ,"jobId", jobId);
     const room = returnvalue?.roomId;
     const userRoom = `user:${room}`;
-    io.to(userRoom).emit("ttfbCompleted", { jobId: jobId, roomId: roomId, result: returnvalue, region: region }); //sending the result to the specific socket room for the completed job
+    io.to(userRoom).emit("ttfbCompleted", { jobId: jobId, roomId: userRoom, result: returnvalue, region: region }); //sending the result to the specific socket room for the completed job
 
-     console.log(" ttfbCompleted emitted" , jobId, "to room" , roomId);
+     console.log(" ttfbCompleted emitted" , jobId, "to room" , userRoom);
 
 })
     }catch(e){

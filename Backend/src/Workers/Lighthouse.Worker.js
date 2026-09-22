@@ -24,7 +24,7 @@ const lightHouseworker = new Worker("lighthouse-queue" , async (job) => {
 
     }catch(err){
         console.log(err)
-        throw new Error
+        throw new Error(`Lighthouse job failed: ${err.message}`)
     }
 
 

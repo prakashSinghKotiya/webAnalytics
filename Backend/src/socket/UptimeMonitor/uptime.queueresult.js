@@ -13,7 +13,7 @@ import { indiaUptimeRobotEvent } from "../../queue/uptime.QeventListner.js"
 export const UptimeRobotEventResult = (event, io )=> {
  try{
 
-    event.on("completed",  ({ jobId, roomId , returnvalue  }) => {   // jobid is given by bullmq when job is completed and result is what we returned
+    event.on("completed",  ({ jobId , returnvalue  }) => {   // jobid is given by bullmq when job is completed and result is what we returned
    
         console.log("ttfb event listningg  RESULT :", returnvalue ,"jobId", jobId);
         const roomId = returnvalue?.roomId; 

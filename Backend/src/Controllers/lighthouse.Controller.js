@@ -25,7 +25,8 @@ export const LighthouseResult = async(req ,res ,next)=>{
 
     const job = await Lighthouequeue.add("lighthouse-queue",{
         targetUrl: url,
-        roomId :  lighthouseDb._id,
+        ligthouseId :  lighthouseDb._id,
+        roomId: roomId
     } )
 
     if(!job){
