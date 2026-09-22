@@ -17,13 +17,13 @@ try{
         return res.status(400).json({ error: "Missing 'url' in request body" });
     }
 
-    const roomId = crypto.randomUUID();
+    const roomId = `user:${req.user._id}`
 
     const workerEventqueue = queue[body.region];
     if (!workerEventqueue) {
         return res.status(400).json({ error: "Invalid region" });
     }
-    const ttfb = await Ttfb.create({userId: req.user._id , url : body.url, region : body.region})
+    await Ttfb.create({userId: req.user._id , url : body.url, region : body.region})
 
   const job = await workerEventqueue.add("measure-ttfb", {   // addding data to queue
       targetUrl: body.url,
@@ -66,7 +66,7 @@ try{
 
     const regions = ["india", "europe", "usa"]
 
-    const roomId = crypto.randomUUID();
+    const roomId = `user:${req.user._id}`
     const jobid = []
 
     await Ttfb.create({userId: req.user._id , url : body.url, region : regions})

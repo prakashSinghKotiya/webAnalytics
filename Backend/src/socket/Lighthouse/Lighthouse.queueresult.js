@@ -15,8 +15,10 @@ export const lighthouseevent = (event , io) =>{
          event.on("completed", ({jobId , returnvalue}) => {
         console.log(`Lighthouse job ${jobId} completed`);
         const room =  returnvalue?.roomId
+        const userRoom = `user:${room}`;
+        
 
-        io.to(room).emit("Lighthouse-completed", { jobId: jobId, result: returnvalue } )
+        io.to(userRoom).emit("Lighthouse-completed", { jobId: jobId, result: returnvalue } )
         
         console.log(`result sent to room: ${room}`)
     

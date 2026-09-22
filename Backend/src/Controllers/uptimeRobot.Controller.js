@@ -33,6 +33,8 @@ export const createMonitor = async (req, res) => {
             });
         }
 
+        const roomId = `user:${req.user._id}`
+
         const monitor = await UptimeMonitor.create({
             url,
             interval,
@@ -41,7 +43,7 @@ export const createMonitor = async (req, res) => {
 
 
         try {
-            await createUptimeScheduler(monitor);
+            await createUptimeScheduler(monitor,roomId);
         } catch (schedulerError) {
             await UptimeMonitor.findByIdAndDelete(monitor._id);
             console.error(`[MonitorCreation] Scheduler failed, rollback successful for ${monitor._id}:`, schedulerError);
@@ -53,6 +55,7 @@ export const createMonitor = async (req, res) => {
 
         return res.status(201).json({
             message: "Monitor created successfully",
+            roomId,
             monitor: {
                 id: monitor._id,
                 url: monitor.url,
@@ -80,6 +83,7 @@ export const updateMonitor = async (req, res) => {
     try {   
         const { id } = req.params;
         const { url, interval , status } = req.body;
+        const roomId = `user:${req.user._id}`
 
 
 
@@ -114,9 +118,9 @@ export const updateMonitor = async (req, res) => {
 
            try {
             if (monitor.status === "active") {
-                await updateUptimeScheduler(monitor);
+                await updateUptimeScheduler(monitor,roomId);
             }else if(monitor.status === "paused"){
-                await removeUptimeScheduler(monitor._id)
+                await removeUptimeScheduler(monitor._id , roomId)
             }
 
             } catch (schedulerError) {
@@ -146,6 +150,7 @@ export const updateMonitor = async (req, res) => {
 export const pauseMonitor = async (req, res) => {
     try {
         const { id } = req.params;
+         const roomId = `user:${req.user._id}`
 
         if (!id) {
             return res.status(400).json({ error: "Monitor ID is required" });
@@ -159,7 +164,7 @@ export const pauseMonitor = async (req, res) => {
         }
 
         try {
-            await removeUptimeScheduler(monitor._id); 
+            await removeUptimeScheduler(monitor._id,roomId); 
         } catch (error) {
         
             return res.status(500).json({ 
@@ -186,6 +191,7 @@ export const pauseMonitor = async (req, res) => {
 export const resumeMonitor = async (req, res) => {
     try {
         const { id } = req.params;
+        const roomId = `user:${req.user._id}`
         const monitor = await UptimeMonitor.findById(id);
 
         if (!monitor) { 
@@ -210,7 +216,7 @@ export const resumeMonitor = async (req, res) => {
 
         try {
             
-            await createUptimeScheduler(monitor);  //   Starting the scheduler
+            await createUptimeScheduler(monitor,roomId);  //   Starting the scheduler
         } catch (schedulerError) {
             //  Rollback if the scheduler fails to start
             console.error("Failed to start scheduler, rolling back DB:", schedulerError);
@@ -247,6 +253,7 @@ export const resumeMonitor = async (req, res) => {
 export const deleteMonitor = async (req, res) => {
     try {
         const { id } = req.params;
+        const roomId = `user:${req.user._id}`
 
         const monitor = await UptimeMonitor.findById(id);
 
@@ -258,7 +265,7 @@ export const deleteMonitor = async (req, res) => {
 
 
         try {
-            await removeUptimeScheduler(monitor._id);
+            await removeUptimeScheduler(monitor._id,roomId);
         } catch (schedulerError) {
            
             //not returnning we will delte it ayway from db , scheduler can be already dead 

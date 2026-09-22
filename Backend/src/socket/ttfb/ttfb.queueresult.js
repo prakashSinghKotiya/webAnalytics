@@ -12,10 +12,11 @@ export const setupTtfbQueueResult = (io) => {
 export const handleQueueEvent = (queueEvent, region, io) => {
     try{
 
-    queueEvent.on("completed",  ({ jobId , returnvalue  }) => {   // jobid is given by bullmq when job is completed and result is what we returned
+    queueEvent.on("completed",  ({ jobId, returnvalue  }) => {   // jobid is given by bullmq when job is completed and result is what we returned
     console.log("ttfb event listningg ", returnvalue ,"jobId", jobId);
-    const roomId = returnvalue.roomId;
-    io.to(roomId).emit("ttfbCompleted", { jobId: jobId, roomId: roomId, result: returnvalue, region: region }); //sending the result to the specific socket room for the completed job
+    const room = returnvalue?.roomId;
+    const userRoom = `user:${room}`;
+    io.to(userRoom).emit("ttfbCompleted", { jobId: jobId, roomId: roomId, result: returnvalue, region: region }); //sending the result to the specific socket room for the completed job
 
      console.log(" ttfbCompleted emitted" , jobId, "to room" , roomId);
 

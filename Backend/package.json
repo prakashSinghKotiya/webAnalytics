@@ -12,6 +12,7 @@
     "bcryptjs": "^3.0.3",
     "bullmq": "^6.3.4",
     "chrome-launcher": "^1.2.1",
+    "cookie": "^2.0.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dompurify": "^3.4.15",

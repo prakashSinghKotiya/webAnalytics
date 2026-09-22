@@ -13,14 +13,14 @@ import { indiaUptimeRobotEvent } from "../../queue/uptime.QeventListner.js"
 export const UptimeRobotEventResult = (event, io )=> {
  try{
 
-    event.on("completed",  ({ jobId , returnvalue  }) => {   // jobid is given by bullmq when job is completed and result is what we returned
+    event.on("completed",  ({ jobId, roomId , returnvalue  }) => {   // jobid is given by bullmq when job is completed and result is what we returned
    
         console.log("ttfb event listningg  RESULT :", returnvalue ,"jobId", jobId);
-        const monitorid = returnvalue?.monitorId; 
+        const roomId = returnvalue?.roomId; 
+        const userRoom = `user:${roomId}`;
    
-        const roomId = `uptime-monitor:${monitorid}`; //socket room id 
    
-        io.to(roomId).emit("uptimeCompleted", { jobId: jobId, roomid: roomId, result: returnvalue }); //sending the result to the specific socket room for the completed job
+        io.to(userRoom).emit("uptimeCompleted", { jobId: jobId, roomid: roomId, result: returnvalue }); //sending the result to the specific socket room for the completed job
 
     
         console.log(" ttfbCompleted emitted" , jobId, "to room" , roomId);

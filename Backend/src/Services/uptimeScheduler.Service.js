@@ -21,7 +21,7 @@ const getInterval = (interval) => {
 };
 
 
-export const createUptimeScheduler = async (monitor) => {
+export const createUptimeScheduler = async (monitor,roomId) => {
 
     const every = getInterval(monitor.interval);
     console.log("MONITOR" ,monitor)
@@ -36,7 +36,7 @@ export const createUptimeScheduler = async (monitor) => {
         {
             name: "uptime-scheduler-event",  // individual job (name) inside the main queue ie uptimeRobot-india
 
-            data: {  monitorId: monitor._id.toString(), url: monitor.url },
+            data: {  monitorId: monitor._id.toString(), url: monitor.url , roomId:roomId },
 
             opts: {   attempts: 3, // if failed try 3 times 
                     backoff: { type: "exponential",  delay: 5000 }, // if failing try after 5 seconds then double 
@@ -47,18 +47,19 @@ export const createUptimeScheduler = async (monitor) => {
 
     return {
         schedulerId,
-        jobId: job?.id
+        jobId: job?.id,
+        roomId
     };
 };
 
 
-export const updateUptimeScheduler = async (monitor) => {
+export const updateUptimeScheduler = async (monitor,roomId) => {
 
-    return createUptimeScheduler(monitor);
+    return createUptimeScheduler(monitor,roomId);
 };
 
 
-export const removeUptimeScheduler = async (monitorId) => {
+export const removeUptimeScheduler = async (monitorId,roomId) => {
 
     const schedulerId = `uptime-monitor:${monitorId}`;
 
@@ -66,5 +67,5 @@ export const removeUptimeScheduler = async (monitorId) => {
         schedulerId
     );
 
-    return removed;
+    return {...removed , roomId}
 };

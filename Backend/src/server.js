@@ -9,6 +9,7 @@ import  UserRoutes from "./Routes/User.Routes.js"
 import  AuthRoutes from "./Routes/Auth.Routes.js"
 import  AdminRoutes from "./Routes/Admin.Routes.js"
 import checkAuth from './Middleware/authentication.Mw.js';
+import cookieParser from 'cookie-parser';
 
 
 
@@ -19,7 +20,7 @@ try {
 } catch (err) { console.error("Database connection failed: ", err); }
 
 export const app = express()
-
+app.use(cookieParser(process.env.COOKIE_SECRET))
 app.use(express.json())
 app.use(cors({
     origin:  process.env.CLIENT_ORIGIN  || 'http://localhost:5173',

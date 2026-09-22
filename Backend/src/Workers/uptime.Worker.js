@@ -12,7 +12,7 @@ const worker = new Worker("uptimeRobot-india", async (job) => {
         
 
     
-         const {url , monitorId} = job.data
+         const {url , roomId} = job.data
          
          if (!url || !monitorId) { 
         throw new Error(`Invalid job data. MonitorId: ${monitorId}, URL: ${url}`); }
@@ -22,7 +22,7 @@ const worker = new Worker("uptimeRobot-india", async (job) => {
         const result = await checkUrl(url)
         console.log("uptimeMonitor result:", result);
 
-        return {monitorId, url , ...result}
+        return {roomId, url , ...result}
 
 
     }catch (error) {

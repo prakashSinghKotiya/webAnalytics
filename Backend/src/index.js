@@ -3,14 +3,15 @@ import { app } from "./server.js";
 import { Server } from "socket.io";
 
 
-import { sendTtfbResult } from "./socket/ttfb/ttfb.socketevent.js";
+
 import { setupTtfbQueueResult } from "./socket/ttfb/ttfb.queueresult.js";
-import { sendUptimeResult } from "./socket/UptimeMonitor/uptime.socketevents.js";
+
 import { UptimeRobotEventHandler } from "./socket/UptimeMonitor/uptime.queueresult.js";
-import { LighthouseConnection } from "./socket/Lighthouse/Lighthouse.socketevent.js";
+
 import { LighthouseResultHandler } from "./socket/Lighthouse/Lighthouse.queueresult.js";
 
 import "./Workers/ttfbStart.worker.js"
+import { socketAuthMiddleware } from "./Middleware/Socket.middleware.js";
 
 const server = http.createServer(app);
 
@@ -18,21 +19,31 @@ export const io = new Server( server, {
     cors: {
         origin: process.env.SOCKET_ORIGIN || "http://localhost:5173" ,
         methods: ["GET", "POST"],
-        Credential:true ,
+        credentials: true
+       
     },
       allowsEIO3: true,
 });
-  // setting up the queue event listener for ttfb queue result
+  
+io.use(socketAuthMiddleware)
+
 
 io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
+    console.log("socket Authenticated User ID:", socket.data.userId);
+
+    const userId = socket.data.userId;
+
+    const userRoom = `user:${userId}`;
+
+     socket.join(userRoom);
+
 
     
-    sendTtfbResult(io, socket);
+    // sendTtfbResult(io, socket);
 
-    sendUptimeResult(io, socket)
+    // sendUptimeResult(io, socket)
 
-    LighthouseConnection(io , socket)
+    // LighthouseConnection(io , socket)
     
 
     socket.on("disconnect", () => {
@@ -40,7 +51,7 @@ io.on("connection", (socket) => {
     });
 })
 
-setupTtfbQueueResult(io);
+setupTtfbQueueResult(io);  // setting up the queue event listener for ttfb queue result
 UptimeRobotEventHandler(io)
 LighthouseResultHandler(io)
 
