@@ -2,7 +2,7 @@
 import bcrypt from "bcrypt"
 
 import mongoose, { Types } from "mongoose"
-import redisDb from "../database/redis.js"
+//import redisDb from "../database/redis.js"
 import OTP from "../Models/Otp.Model.js"
 import User from "../Models/User.Model.js"
 import Session from "../Models/Session.Model.js"

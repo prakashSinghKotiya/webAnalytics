@@ -1,6 +1,6 @@
 import express from "express"
-import checkAuth, { adminChecker, isAdmin } from "../Middleware/authentication.Mw"
-import { adminPowerlogout, DeleteUser, getAllUsers } from "../Controllers/User.Controller"
+import checkAuth, { adminChecker, isAdmin } from "../Middleware/authentication.Mw.js"
+import { adminPowerlogout, DeleteUser, getAllUsers } from "../Controllers/User.Controller.js"
 
 
 

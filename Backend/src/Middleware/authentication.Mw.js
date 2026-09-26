@@ -1,5 +1,5 @@
-import Session from "../Models/Session.Model";
-import User from "../Models/User.Model";
+import Session from "../Models/Session.Model.js";
+import User from "../Models/User.Model.js";
 
 
 

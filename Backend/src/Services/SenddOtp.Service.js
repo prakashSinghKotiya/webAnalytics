@@ -1,5 +1,5 @@
  import nodemailer from "nodemailer";
-import OTP from "../Models/Otp.Model";
+import OTP from "../Models/Otp.Model.js";
 
 
 export async function sendOtp(email){

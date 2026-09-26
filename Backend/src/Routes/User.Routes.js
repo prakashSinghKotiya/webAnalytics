@@ -1,7 +1,7 @@
 import express from "express"
-import checkAuth from "../Middleware/authentication.Mw"
-import { loginUser, logout, registerUser, userDetails } from "../Controllers/User.Controller"
-import { registerLimiter, requstThrottling } from "../Validators/RateLimiting"
+import checkAuth from "../Middleware/authentication.Mw.js"
+import { loginUser, logout, registerUser, userDetails } from "../Controllers/User.Controller.js"
+import { registerLimiter, requstThrottling } from "../Validators/RateLimiting.js"
 
 
 

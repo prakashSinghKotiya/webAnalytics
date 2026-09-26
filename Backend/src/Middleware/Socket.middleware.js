@@ -1,7 +1,7 @@
 
 import * as cookie from "cookie"; 
 import cookieParser from "cookie-parser"; // Needed to unsign the cookie
-import Session from "../Models/Session.Model";
+import Session from "../Models/Session.Model.js";
 
 
 

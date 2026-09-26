@@ -1,5 +1,5 @@
 import express from "express"
-import { otpsent, otpverify } from "../Controllers/AuthController"
+import { otpsent, otpverify } from "../Controllers/AuthController.js"
 
 
 const router = express.Router()

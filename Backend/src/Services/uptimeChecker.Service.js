@@ -27,7 +27,7 @@ export const checkUrl = (targetUrl, options = {}) => {
     const checkingFor = url.hostname
 
     const client = url.protocol === "https:" ? https : http;
-    //console.log(client, "client");
+  
 
     const startTime = performance.now();
 

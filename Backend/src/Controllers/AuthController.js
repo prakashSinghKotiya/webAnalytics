@@ -1,7 +1,7 @@
 import z from "zod";
-import OTP from "../Models/Otp.Model";
-import { sendOtp } from "../Services/SenddOtp.Service";
-import { otpSchema } from "../Validators/ZodSchema";
+import OTP from "../Models/Otp.Model.js";
+import { sendOtp } from "../Services/SenddOtp.Service.js";
+import { otpSchema } from "../Validators/ZodSchema.js";
 
 
 export const otpsent = async (req, res, next )=>{

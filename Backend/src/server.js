@@ -10,6 +10,7 @@ import  AuthRoutes from "./Routes/Auth.Routes.js"
 import  AdminRoutes from "./Routes/Admin.Routes.js"
 import checkAuth from './Middleware/authentication.Mw.js';
 import cookieParser from 'cookie-parser';
+import { checkDnsRecords } from './Services/dnsRecordtpe.Service.js';
 
 
 
@@ -31,6 +32,13 @@ app.get('/', (req, res) => {
     res.send('running server')
 })
 
+app.get('/test',  async (req, res) => {
+   const {url } = req.body
+   const result = await checkDnsRecords(url)
+   return res.status(200).json(result  )
+
+})
+
 
 app.use("/user", UserRoutes) 
 app.use("/auth", AuthRoutes)
@@ -39,6 +47,7 @@ app.use("/admin", AdminRoutes)
 app.use('/ttfb',checkAuth, ttfbRoute);
 app.use('/uptime',checkAuth, uptimeRobotRoute);
 app.use('/lighthouse',checkAuth, LighthouseRoute);
+
 
 
 

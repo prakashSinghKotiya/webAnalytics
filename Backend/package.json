@@ -9,7 +9,7 @@
     "worker": "node --watch --no-deprecation --env-file=.env src/Workers/ttfbStart.Worker.js"
   },
   "dependencies": {
-    "bcryptjs": "^3.0.3",
+    "bcrypt": "^6.0.0",
     "bullmq": "^6.3.4",
     "chrome-launcher": "^1.2.1",
     "cookie": "^2.0.1",
