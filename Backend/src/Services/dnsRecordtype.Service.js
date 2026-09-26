@@ -3,9 +3,7 @@ import { isIP } from "node:net";
 import { domainToASCII } from "node:url";
 import { performance } from "node:perf_hooks";
 
-// ---------------------------------------------------------------------------
-// Config (can be overridden with environment variables)
-// ---------------------------------------------------------------------------
+
 const CONFIG = Object.freeze({
   servers: (process.env.DNS_SERVERS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   timeoutMs: Number(process.env.DNS_TIMEOUT_MS) || 3000,
@@ -43,9 +41,8 @@ const fetchers = {
   CAA: (r, h) => r.resolveCaa(h),
 };
 
-// ---------------------------------------------------------------------------
-// Input checks and normalization
-// ---------------------------------------------------------------------------
+
+//checker fn
 export function normalizeHostname(input) {
   if (typeof input !== "string" || !input.trim()) {
     throw new DnsServiceError("Hostname is required", { statusCode: 400, code: "INVALID_HOSTNAME" });
@@ -67,12 +64,8 @@ export function normalizeHostname(input) {
   return ascii;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
-// Runs a single record-type lookup and normalizes the result/error into one shape.
-// Never throws - always resolves, so Promise.allSettled just gives uniform fulfillments.
+//helper fn
 async function resolveOne(resolver, hostname, type) {
   const fetcher = fetchers[type];
   try {
@@ -100,6 +93,9 @@ const summarize = (records) => {
   };
 };
 
+
+
+//main fn
 export async function checkDnsRecords(input, options = {}) {
   const {
     types = DNS_RECORD_TYPES,
