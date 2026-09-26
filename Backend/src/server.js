@@ -11,7 +11,8 @@ import  AdminRoutes from "./Routes/Admin.Routes.js"
 import checkAuth from './Middleware/authentication.Mw.js';
 import cookieParser from 'cookie-parser';
 import { checkDnsRecords } from './Services/dnsRecordtype.Service.js';
-import { findRedirects } from './Services/upeg.js';
+import { findRedirects } from './Services/redirectCheck.Service.js';
+import { runPageSpeed } from './Services/psInsight.Service.js';
 
 
 
@@ -35,7 +36,7 @@ app.get('/', (req, res) => {
 
 app.get('/test',  async (req, res) => {
    const {url } = req.body
-   const result = await findRedirects(url)
+   const result = await runPageSpeed(url)
    return res.status(200).json(result  )
 
 })

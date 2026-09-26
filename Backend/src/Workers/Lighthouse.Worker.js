@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import connection from "../config/redis.js"
-import { lighthouseReport } from "../Services/Lighhouse.Service.js";
+
+import { runPageSpeed } from "../Services/psInsight.Service.js";
 
 
 const lightHouseworker = new Worker("lighthouse-queue" , async (job) => {
@@ -16,7 +17,7 @@ const lightHouseworker = new Worker("lighthouse-queue" , async (job) => {
 
     try{
 
-        const result =  await lighthouseReport(targetUrl)
+        const result =  await runPageSpeed(targetUrl)
         if(!result) {return { status : "failed" }}
         console.log("lighthouse result : ", result)
 
