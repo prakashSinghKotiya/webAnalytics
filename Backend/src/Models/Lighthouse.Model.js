@@ -2,6 +2,14 @@ import { model, Schema } from "mongoose";
 
 const LighthouseSchema = new Schema(
     {
+
+            userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
+
         url: {
             type: String,
             required: true,
@@ -10,8 +18,12 @@ const LighthouseSchema = new Schema(
         
         data:{
             type: String,
-            trime: true
-        }
+            trim: true
+        },
+        result: {
+              type: Schema.Types.Mixed,
+              default: null,
+            },
 
     },
     {

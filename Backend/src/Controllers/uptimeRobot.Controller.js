@@ -294,8 +294,12 @@ export const deleteMonitor = async (req, res) => {
 // GET
 
 export const getMonitors = async (req, res) => {
+
     try {
-        const monitors = await UptimeMonitor.find()
+        const id = req.user._id;
+        if(!id){ return res.status(400).json({error : "userId is required"})}
+
+        const monitors = await UptimeMonitor.find({userId : id }).lean()
             .sort({ createdAt: -1 })
             .lean(); 
 
