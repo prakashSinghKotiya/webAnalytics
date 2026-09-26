@@ -1,4 +1,4 @@
-import { Queue } from "bullmq";
+import { Queue, QueueEvents } from "bullmq";
 import connection from "../config/redis.js"
 
 
@@ -12,17 +12,15 @@ const defaultJobOptions = {
   removeOnFail: 20,  
 };
 
-export const whoisLookup = new Queue("whoisLookup-queue" , {
+export const redirectQueue = new Queue("redirect-queue" , {
     connection,
     defaultJobOptions
 })
 
 
 
-
-
 //queue event listner 
-export const whoisLookupListener = new QueueEvents("whoisLookup-queue" , {
+export const redirectQueueListener = new QueueEvents("redirect-queue" , {
     connection
 })
 
@@ -35,4 +33,4 @@ const attachQueueErrorHandler = (queue, region) => {
     });
 };
 
-attachQueueErrorHandler(whoisLookup, "india");
+attachQueueErrorHandler(redirectQueue, "india");

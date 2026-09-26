@@ -33,10 +33,11 @@ export const lighthouseevent = (event , io) =>{
 
             const job = await Lighthouequeue.getJob(jobId)
              const roomId = job?.data?.roomId;
+             const userRoom = `user:${roomId}`
 
             console.log("Reason:", failedReason);
 
-            io.to(roomId).emit("Lighthouse-failed", {
+            io.to(userRoom).emit("Lighthouse-failed", {
                 jobId,
                 error: failedReason
             });
