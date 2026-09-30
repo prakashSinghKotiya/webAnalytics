@@ -8,8 +8,8 @@ const defaultJobOptions = {
     type: "exponential",
     delay: 1000, 
   },
-  removeOnComplete: true, 
-  removeOnFail: 20,  
+ removeOnComplete: { age: 60, count: 1000 }, 
+  removeOnFail: { age: 60, count: 1000 },  
 };
 
 export const redirectQueue = new Queue("redirect-queue" , {
