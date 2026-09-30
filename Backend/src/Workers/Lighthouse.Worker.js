@@ -10,15 +10,15 @@ const lightHouseworker = new Worker("lighthouse-queue" , async (job) => {
     if (job.name !== "lighthouse-queue" ) { return;  }
 
     const {targetUrl , roomId} = job.data
+     if(!targetUrl || !roomId) {
+        throw new Error(`Invalid job data.: ${targetUrl} , roomId : ${roomId} `); } 
 
-    if (!targetUrl ) { 
-        throw new Error(`Invalid job data. MonitorId:  URL: ${targetUrl}`); }
 
 
     try{
 
         const result =  await runPageSpeed(targetUrl)
-        if(!result) {return { status : "failed" }}
+         if(!result ||  !result.success ) {return { status : "failed" }}
         console.log("lighthouse result : ", result)
 
         return {...result , roomId} 

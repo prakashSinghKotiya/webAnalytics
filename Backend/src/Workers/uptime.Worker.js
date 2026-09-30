@@ -20,6 +20,7 @@ const worker = new Worker("uptimeRobot-india", async (job) => {
           try{
 
         const result = await checkUrl(url)
+         if(!result ||  !result.success ) {return { status : "failed" }}
         console.log("uptimeMonitor result:", result);
 
         return {roomId, url , ...result}

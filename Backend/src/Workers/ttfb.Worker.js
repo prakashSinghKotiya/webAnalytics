@@ -18,6 +18,7 @@ const worker = new Worker ( queueName ,  async (job) => {  //listning to ttfb qu
     try{
 
         const result = await measureTTFB(targetUrl);
+         if(!result ||  !result.success ) {return { status : "failed" }}
 
         console.log("TTFB result:", result);
 
