@@ -14,8 +14,8 @@ export const lighthouseevent = (event , io) =>{
     try{
          event.on("completed", ({jobId , returnvalue}) => {
         console.log(`Lighthouse job ${jobId} completed`);
-        const room =  returnvalue?.roomId
-        const userRoom = `user:${room}`;
+        const userRoom =  returnvalue?.roomId
+       // const userRoom = `user:${room}`;
         
 
         io.to(userRoom).emit("Lighthouse-completed", { jobId: jobId, result: returnvalue } )
@@ -32,8 +32,8 @@ export const lighthouseevent = (event , io) =>{
             console.log(`Lighthouse job ${jobId} failed`);
 
             const job = await Lighthouequeue.getJob(jobId)
-             const roomId = job?.data?.roomId;
-             const userRoom = `user:${roomId}`
+             const userRoom = job?.data?.roomId;
+           //  const userRoom = `user:${roomId}`
 
             console.log("Reason:", failedReason);
 

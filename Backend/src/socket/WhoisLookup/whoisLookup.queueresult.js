@@ -15,8 +15,8 @@ export const whoisLookupEvent = (event , io) =>{
     try{
          event.on("completed", ({jobId , returnValue}) => {
         console.log(`whoisLookup job ${jobId} completed`);
-        const room =  returnValue?.roomId
-        const userRoom = `user:${room}`;
+        const userRoom =  returnValue?.roomId
+        //const userRoom = `user:${room}`;
         
 
         io.to(userRoom).emit("whoisLookup-completed", { jobId: jobId, result: returnValue } )
@@ -33,8 +33,8 @@ export const whoisLookupEvent = (event , io) =>{
             console.log(`whoisLookup job ${jobId} failed`);
 
             const job = await whoisLookup.getJob(jobId)
-             const roomId = job?.data?.roomId;
-             const userRoom = `user:${roomId}`
+             const userRoom = job?.data?.roomId;
+            // const userRoom = `user:${roomId}`
 
             console.log("Reason:", failedReason);
 

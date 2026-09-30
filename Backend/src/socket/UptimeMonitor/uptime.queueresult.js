@@ -16,8 +16,8 @@ export const UptimeRobotEventResult = (event, io )=> {
     event.on("completed",  ({ jobId , returnvalue  }) => {   // jobid is given by bullmq when job is completed and result is what we returned
    
         console.log("ttfb event listningg  RESULT :", returnvalue ,"jobId", jobId);
-        const roomId = returnvalue?.roomId; 
-        const userRoom = `user:${roomId}`;
+        const userRoom = returnvalue?.roomId; 
+      //  const userRoom = `user:${roomId}`;
    
    
         io.to(userRoom).emit("uptimeCompleted", { jobId: jobId, roomid: roomId, result: returnvalue }); //sending the result to the specific socket room for the completed job

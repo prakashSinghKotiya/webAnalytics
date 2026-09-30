@@ -15,8 +15,8 @@ export const redirectQueueEvent = (event , io) =>{
     try{
          event.on("completed", ({jobId , returnValue}) => {
         console.log(`redirectQueueListener job ${jobId} completed`);
-        const room =  returnValue?.roomId
-        const userRoom = `user:${room}`;
+        const userRoom =  returnValue?.roomId
+        //const userRoom = `user:${room}`;
         
 
         io.to(userRoom).emit("redirectQueue-completed", { jobId: jobId, result: returnValue } )
@@ -33,8 +33,8 @@ export const redirectQueueEvent = (event , io) =>{
             console.log(`redirectQueue job ${jobId} failed`);
 
             const job = await redirectQueue.getJob(jobId)
-             const roomId = job?.data?.roomId;
-             const userRoom = `user:${roomId}`
+             const userRoom = job?.data?.roomId;
+            // const userRoom = `user:${roomId}`
 
             console.log("Reason:", failedReason);
 

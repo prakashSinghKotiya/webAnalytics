@@ -14,8 +14,8 @@ export const handleQueueEvent = (queueEvent, region, io) => {
 
     queueEvent.on("completed",  ({ jobId, returnvalue  }) => {   // jobid is given by bullmq when job is completed and result is what we returned
     console.log("ttfb event listningg ", returnvalue ,"jobId", jobId);
-    const room = returnvalue?.roomId;
-    const userRoom = `user:${room}`;
+    const userRoom = returnvalue?.roomId;
+    //const userRoom = `user:${room}`;
     io.to(userRoom).emit("ttfbCompleted", { jobId: jobId, roomId: userRoom, result: returnvalue, region: region }); //sending the result to the specific socket room for the completed job
 
      console.log(" ttfbCompleted emitted" , jobId, "to room" , userRoom);
