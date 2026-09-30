@@ -11,7 +11,7 @@ export const whoisLookupController = async (req, res) => {
 
     const roomId = `user:${req.user._id}`
 
-    const record = await WhoisLookup.create({
+    const whoisDb = await WhoisLookup.create({
       userId: req.user._id,
       url: url.trim(),
     });
@@ -19,11 +19,11 @@ export const whoisLookupController = async (req, res) => {
     const job = await whoisLookup.add("whoisLookup-queue", {
       targetUrl: url.trim(),
       roomId,
-      recordId: record._id,
+      whoisDbId: whoisDb._id,
     });
 
     if (!job) {
-      await WhoisLookup.findByIdAndDelete(record._id);
+      await WhoisLookup.findByIdAndDelete(whoisDb._id);
       return res.status(500).json({ success: false, error: "Failed to queue WHOIS lookup" });
     }
 
@@ -32,7 +32,7 @@ export const whoisLookupController = async (req, res) => {
       message: "WHOIS lookup queued",
       jobId: job.id,
       roomId,
-      data: record,
+      data: whoisDb,
     });
   } catch (err) {
     console.error("[whoisLookupController]", err);

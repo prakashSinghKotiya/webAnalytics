@@ -49,6 +49,12 @@ const ttfbSchema = new Schema(
       type: Date,
       default: null,
     },
+
+    createdAt: { // ttl index 
+    type: Date,
+    default: Date.now,
+    expires:  60 * 60 * 24 * 1, 
+  },
   },
   {
     timestamps: true,

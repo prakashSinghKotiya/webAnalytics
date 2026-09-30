@@ -22,6 +22,12 @@ const DnsRecordSchema = new Schema(
       default: null,
     },
 
+       createdAt: { // ttl index 
+    type: Date,
+    default: Date.now,
+    expires:  60 * 60 * 24 * 1, // 1 days
+  },
+
 
   
     completedAt: {

@@ -28,6 +28,11 @@ const uptimeMonitorSchema = new Schema(
             enum: ["active", "paused"],
             default: "active"
         },
+           createdAt: { // ttl index 
+    type: Date,
+    default: Date.now,
+    expires:  60 * 60 * 24 * 30, // 30 days
+  },
     },
     {
         timestamps: true

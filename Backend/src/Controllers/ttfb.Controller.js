@@ -23,11 +23,12 @@ try{
     if (!workerEventqueue) {
         return res.status(400).json({ error: "Invalid region" });
     }
-    await Ttfb.create({userId: req.user._id , url : body.url, region : body.region})
+    const ttfbDb = await Ttfb.create({userId: req.user._id , url : body.url, region : body.region})
 
   const job = await workerEventqueue.add("measure-ttfb", {   // addding data to queue
       targetUrl: body.url,
-      roomId: roomId
+      roomId: roomId,
+      ttfbdbId: ttfbDb._id 
     });
     console.log(job)
 
@@ -69,7 +70,7 @@ try{
     const roomId = `user:${req.user._id}`
     const jobid = []
 
-    await Ttfb.create({userId: req.user._id , url : body.url, region : regions})
+    const ttfbDb = await Ttfb.create({userId: req.user._id , url : body.url, region : regions})
 
     for(const region of Object.keys(queue)) {
 
@@ -77,7 +78,8 @@ try{
         console.log("workerEventqueue instance from controller ttfb :", workerEventqueue)
         const job = await workerEventqueue.add("measure-ttfb-all", {   // addding job to queue (inside redis)
         targetUrl: body.url,
-        roomId: roomId
+        roomId: roomId,
+        ttfbdbId: ttfbDb._id 
        
     });
     console.log(job)
