@@ -30,9 +30,9 @@ const html = `
   `;
 
 const info = await transporter.sendMail({
-  from: "storage app <prakashkotya100@gmail.com>",
+  from: "web analytics  <prakashkotya100@gmail.com>",
   to: email,
-  subject: "Storage app otp",
+  subject: "web analytics  otp",
   html
 });
 
