@@ -65,14 +65,12 @@ try{
         return res.status(400).json({ error: "Invalid 'region' in request body" });
     }
 
-    const regions = ["india", "europe", "usa"]
-
     const roomId = `user:${req.user._id}`
     const jobid = []
 
-    const ttfbDb = await Ttfb.create({userId: req.user._id , url : body.url, region : regions})
-
     for(const region of Object.keys(queue)) {
+
+        const ttfbDb = await Ttfb.create({userId: req.user._id , url : body.url, region})
 
         const workerEventqueue = queue[region];
         console.log("workerEventqueue instance from controller ttfb :", workerEventqueue)

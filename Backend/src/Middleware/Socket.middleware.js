@@ -10,6 +10,7 @@ export const socketAuthMiddleware = async (socket , next ) => {
   try {
     
     const cookieHeader = socket.handshake.headers.cookie;
+  //  console.log("Socket Handshake Cookies:", socket.handshake.headers.cookie);
 
     if (!cookieHeader) {
       return next(new Error("Authentication required. No cookies found."));
@@ -17,7 +18,9 @@ export const socketAuthMiddleware = async (socket , next ) => {
 
    
     const cookies = cookie.parseCookie(cookieHeader);
-    let rawToken = cookies.token;
+    // console.log("Parsed Cookies:", cookies);
+     console.log("Parsed Cookies:", cookies.token , cookies.sid);
+    let rawToken = cookies.sid;
 
     if (!rawToken) {
       return next(new Error("Authentication token is missing"));
@@ -25,6 +28,7 @@ export const socketAuthMiddleware = async (socket , next ) => {
 
 
     const token = cookieParser.signedCookie(rawToken, process.env.COOKIE_SECRET);
+    console.log("Signed Token:", token);
 
 
     if (!token || token === rawToken) {
@@ -45,6 +49,7 @@ export const socketAuthMiddleware = async (socket , next ) => {
     next();
     
   } catch (error) {
-    next(new Error("Invalid authentication token"));
+    console.log("Socket authentication error:", error);
+    next(new Error("Invalid authentication token" ));
   }
 };

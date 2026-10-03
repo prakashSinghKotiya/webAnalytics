@@ -7,6 +7,7 @@ import OTP from "../Models/Otp.Model.js"
 import User from "../Models/User.Model.js"
 import Session from "../Models/Session.Model.js"
 import { loginSchema, registerSchema } from "../Validators/ZodSchema.js"
+import z from "zod"
 
 
 
@@ -113,7 +114,7 @@ export const loginUser = async(req, res, next)=>{
      const sessionExpiryTime = 60 * 1000 * 60 * 24 * 7;
      
 
-    res.cookie("sid", session._id ,{ 
+    res.cookie("sid", session._id.toString() ,{ 
         httpOnly: true,
         signed: true,
         maxAge: sessionExpiryTime,
