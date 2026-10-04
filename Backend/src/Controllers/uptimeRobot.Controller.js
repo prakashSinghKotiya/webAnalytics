@@ -38,7 +38,8 @@ export const createMonitor = async (req, res) => {
         const monitor = await UptimeMonitor.create({
             url,
             interval,
-            status: "active"
+            status: "active",
+            userId: req.user._id
         });
 
 

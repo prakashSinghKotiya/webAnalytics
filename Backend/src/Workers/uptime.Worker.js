@@ -6,8 +6,9 @@ import { checkUrl } from "../Services/uptimeChecker.Service.js";
 const worker = new Worker("uptimeRobot-india", async (job) => { 
 
         console.log("Processing uptimeMonitor for :", job.data);
+     //   console.log("JOB !!! UPTIME ", job);
 
-        if (job.name !== "uptime-scheduler-event") { return;  }
+        //if (job.name !=="uptimeRobot-india") { return;  } 
 
         
 
@@ -20,7 +21,7 @@ const worker = new Worker("uptimeRobot-india", async (job) => {
           try{
 
         const result = await checkUrl(url)
-         if(!result ||  !result.success ) {return { status : "failed" }}
+         if(!result ) {return { status : "failed" }}
         console.log("uptimeMonitor result:", result);
 
         return {roomId, url , ...result}

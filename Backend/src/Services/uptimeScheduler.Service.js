@@ -34,7 +34,7 @@ export const createUptimeScheduler = async (monitor,roomId) => {
         { every },  // run after every interval
 
         {
-            name: "uptime-scheduler-event",  // individual job (name) inside the main queue ie uptimeRobot-india
+            name:"uptime-scheduler-event",  // individual job (name) inside the main queue ie uptimeRobot-india
 
             data: {  monitorId: monitor._id.toString(), url: monitor.url , roomId:roomId },
 
