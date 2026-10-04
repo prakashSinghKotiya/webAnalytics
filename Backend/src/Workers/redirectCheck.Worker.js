@@ -30,7 +30,7 @@ const redirectCheck = new Worker("redirect-queue" , async (job) => {
 
 
 },{
-    connection,
+    connection: { ...connection },
     concurrency :10 ,
 }) 
 

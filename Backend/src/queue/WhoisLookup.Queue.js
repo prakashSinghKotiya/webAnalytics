@@ -1,4 +1,4 @@
-import { Queue } from "bullmq";
+import { Queue, QueueEvents } from "bullmq";
 import connection from "../config/redis.js"
 
 
@@ -13,7 +13,7 @@ const defaultJobOptions = {
 };
 
 export const whoisLookup = new Queue("whoisLookup-queue" , {
-    connection,
+    connection: { ...connection },
     defaultJobOptions
 })
 
@@ -23,7 +23,7 @@ export const whoisLookup = new Queue("whoisLookup-queue" , {
 
 //queue event listner 
 export const whoisLookupListener = new QueueEvents("whoisLookup-queue" , {
-    connection
+    connection: { ...connection }
 })
 
 

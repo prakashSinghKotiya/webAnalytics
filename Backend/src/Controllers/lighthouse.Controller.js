@@ -19,6 +19,7 @@ export const LighthouseResult = async(req ,res ,next)=>{
         
        
     const lighthouseDb = await Lighthouse.create({
+        userId: req.user?._id,
         url : url
     })
         

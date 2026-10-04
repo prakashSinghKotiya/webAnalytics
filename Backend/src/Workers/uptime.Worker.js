@@ -34,7 +34,7 @@ const worker = new Worker("uptimeRobot-india", async (job) => {
 },
     
     {
-        connection ,
+        connection: { ...connection },
         concurrency: 10
     } )
 

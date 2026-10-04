@@ -68,7 +68,8 @@ function probe(url, { timeout, userAgent }) {
           location: res.headers.location || null,
           timeMs: Math.round(performance.now() - start),
         });
-        res.destroy(); // Only headers are needed, skip downloading the body
+        res.resume(); // drain body so the socket closes cleanly
+        res.on("error", () => {}); // suppress post-resolve socket errors
       }
     );
 

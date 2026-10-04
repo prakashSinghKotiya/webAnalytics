@@ -1,7 +1,9 @@
 import { startTtfbWorker } from "./ttfb.Worker.js";
 import lightHouseworker from "./Lighthouse.Worker.js"
 import worker from "./uptime.Worker.js"
-
+import dnsWorker from "./dnsRecordcheck.Worker.js"
+import redirectWorker from "./redirectCheck.Worker.js"
+import whoisWorker from "./whoisLookup.Worker.js"
 const regions = [
     "india",
     "europe",

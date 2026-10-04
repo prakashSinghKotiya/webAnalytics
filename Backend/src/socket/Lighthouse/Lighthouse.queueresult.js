@@ -20,7 +20,7 @@ export const lighthouseevent = (event , io) =>{
 
         io.to(userRoom).emit("Lighthouse-completed", { jobId: jobId, result: returnvalue } )
         
-        console.log(`result sent to room: ${room}`)
+        console.log(`result sent to room: ${userRoom}`)
     
 
         })

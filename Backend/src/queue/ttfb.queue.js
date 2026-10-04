@@ -12,18 +12,18 @@ const defaultJobOptions = {
 };
 
 
-export const indiaTtfbQueue = new Queue("ttfb-india", {  //creating a queue named ttfb-india and now we can add jobs to this queue from controller doing indiaTtfbQueue.add
-    connection,
+export const indiaTtfbQueue = new Queue("ttfb-india", {
+    connection: { ...connection },
     defaultJobOptions,
 });
 
 export const europeTtfbQueue = new Queue("ttfb-europe", {
-    connection,
+    connection: { ...connection },
     defaultJobOptions,
 });
 
 export const usaTtfbQueue = new Queue("ttfb-usa", {
-    connection,
+    connection: { ...connection },
     defaultJobOptions,
 });
 

@@ -19,8 +19,8 @@ const dnsRecordCheck = new Worker("dnsRecordCheck-queue" , async (job) => {
     try{
 
         const result =  await checkDnsRecords(targetUrl)
-         if(!result ||  !result.success ) {return { status : "failed" }}
-        console.log("lighthouse result : ", result)
+        if(!result || result.status === "failed") {return { status : "failed" }}
+        console.log("dnsRecordCheck result : ", result)
 
         return {...result , roomId} 
 
@@ -31,7 +31,7 @@ const dnsRecordCheck = new Worker("dnsRecordCheck-queue" , async (job) => {
 
 
 },{
-    connection,
+    connection: { ...connection },
     concurrency :10 ,
 }) 
 

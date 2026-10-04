@@ -12,8 +12,8 @@ const defaultJobOptions = {
 };
 
 
-export const uptimeMonitorQueue = new Queue("uptimeRobot-india", {  //creating a queue named ttfb-india
-    connection,
+export const uptimeMonitorQueue = new Queue("uptimeRobot-india", {
+    connection: { ...connection },
     defaultJobOptions,
 });
 

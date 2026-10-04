@@ -13,15 +13,15 @@ export const whoisLookupResultHandler =(io) => {
 export const whoisLookupEvent = (event , io) =>{
 
     try{
-         event.on("completed", ({jobId , returnValue}) => {
+         event.on("completed", ({jobId , returnvalue}) => {
         console.log(`whoisLookup job ${jobId} completed`);
-        const userRoom =  returnValue?.roomId
+        const userRoom =  returnvalue?.roomId
         //const userRoom = `user:${room}`;
         
 
-        io.to(userRoom).emit("whoisLookup-completed", { jobId: jobId, result: returnValue } )
+        io.to(userRoom).emit("whoisLookup-completed", { jobId: jobId, result: returnvalue } )
         
-        console.log(`result sent to room: ${room}`)
+        console.log(`result sent to room: ${userRoom}`)
     
 
         })

@@ -13,7 +13,7 @@ const defaultJobOptions = {
 };
 
 export const redirectQueue = new Queue("redirect-queue" , {
-    connection,
+    connection: { ...connection },
     defaultJobOptions
 })
 
@@ -21,7 +21,7 @@ export const redirectQueue = new Queue("redirect-queue" , {
 
 //queue event listner 
 export const redirectQueueListener = new QueueEvents("redirect-queue" , {
-    connection
+    connection: { ...connection }
 })
 
 

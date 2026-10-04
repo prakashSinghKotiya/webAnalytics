@@ -9,9 +9,13 @@ import { setupTtfbQueueResult } from "./socket/ttfb/ttfb.queueresult.js";
 import { UptimeRobotEventHandler } from "./socket/UptimeMonitor/uptime.queueresult.js";
 
 import { LighthouseResultHandler } from "./socket/Lighthouse/Lighthouse.queueresult.js";
+import { dnsRecordCheckResultHandler } from "./socket/dnsRecordCheck/dnsRecordCheck.queueresult.js";
 
 import "./Workers/ttfbStart.worker.js"
 import { socketAuthMiddleware } from "./Middleware/Socket.middleware.js";
+import { sendTtfbResult } from "./socket/ttfb/ttfb.socketevent.js";
+import { redirectQueueResultHandler } from "./socket/Redirect/RedirectCheck.queueresult.js";
+import { whoisLookupResultHandler } from "./socket/WhoisLookup/whoisLookup.queueresult.js";
 
 const server = http.createServer(app);
 
@@ -39,7 +43,7 @@ io.on("connection", (socket) => {
 
 
     
-    // sendTtfbResult(io, socket);
+    sendTtfbResult(io, socket);
 
     // sendUptimeResult(io, socket)
 
@@ -54,6 +58,10 @@ io.on("connection", (socket) => {
 setupTtfbQueueResult(io);  // setting up the queue event listener for ttfb queue result
 UptimeRobotEventHandler(io)
 LighthouseResultHandler(io)
+dnsRecordCheckResultHandler(io)
+redirectQueueResultHandler(io)
+whoisLookupResultHandler(io)
+
 
 
 const PORT = process.env.PORT || 5000

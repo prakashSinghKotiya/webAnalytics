@@ -13,15 +13,16 @@ export const dnsRecordCheckResultHandler =(io) => {
 export const dnsRecordCheckEvent = (event , io) =>{
 
     try{
-         event.on("completed", ({jobId , returnValue}) => {
+         event.on("completed", ({jobId , returnvalue, returnValue}) => {
         console.log(`dnsRecordCheck job ${jobId} completed`);
-        const userRoom =  returnValue?.roomId
+        const data = returnvalue || returnValue;
+        const userRoom =  data?.roomId
       //  const userRoom = `user:${room}`;
         
 
-        io.to(userRoom).emit("dnsRecordCheck-completed", { jobId: jobId, result: returnValue } )
+        io.to(userRoom).emit("dnsRecordCheck-completed", { jobId: jobId, result: data } )
         
-        console.log(`result sent to room: ${room}`)
+        console.log(`result sent to room: ${userRoom}`)
     
 
         })

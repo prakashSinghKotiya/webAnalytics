@@ -31,7 +31,7 @@ const whoisLookUp = new Worker("whoisLookup-queue" , async (job) => {
 
 
 },{
-    connection,
+    connection: { ...connection },
     concurrency :10 ,
 }) 
 

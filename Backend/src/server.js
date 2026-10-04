@@ -13,6 +13,9 @@ import cookieParser from 'cookie-parser';
 import { checkDnsRecords } from './Services/dnsRecordtype.Service.js';
 import { findRedirects } from './Services/redirectCheck.Service.js';
 import { runPageSpeed } from './Services/psInsight.Service.js';
+import DnsRecordRoutes from './Routes/dnsRecord.Routes.js';
+import RedirectCheckRoutes from './Routes/redirectCheck.Routes.js';
+import WhoisLookupRoutes from './Routes/whoisLookup.Routes.js';
 
 
 
@@ -34,12 +37,7 @@ app.get('/', (req, res) => {
     res.send('running server')
 })
 
-app.get('/test',  async (req, res) => {
-   const {url } = req.body
-   const result = await runPageSpeed(url)
-   return res.status(200).json(result  )
 
-})
 
 
 app.use("/user", UserRoutes) 
@@ -49,6 +47,10 @@ app.use("/admin", AdminRoutes)
 app.use('/ttfb',checkAuth, ttfbRoute);
 app.use('/uptime',checkAuth, uptimeRobotRoute);
 app.use('/lighthouse',checkAuth, LighthouseRoute);
+
+app.use('/dns', checkAuth, DnsRecordRoutes);
+app.use('/redirect', checkAuth, RedirectCheckRoutes);
+app.use('/whois', checkAuth, WhoisLookupRoutes);
 
 
 

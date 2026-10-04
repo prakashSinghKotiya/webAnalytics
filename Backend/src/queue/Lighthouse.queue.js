@@ -13,7 +13,7 @@ const defaultJobOptions = {
 };
 
 export const Lighthouequeue = new Queue("lighthouse-queue" , {
-    connection,
+    connection: { ...connection },
     defaultJobOptions
 })
 

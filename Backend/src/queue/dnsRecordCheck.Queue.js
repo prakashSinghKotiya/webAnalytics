@@ -13,7 +13,7 @@ const defaultJobOptions = {
 };
 
 export const dnsRecordCheck = new Queue("dnsRecordCheck-queue" , {
-    connection,
+    connection: { ...connection },
     defaultJobOptions
 })
 
@@ -21,7 +21,7 @@ export const dnsRecordCheck = new Queue("dnsRecordCheck-queue" , {
 
 //queue event listner 
 export const dnsRecordCheckListener = new QueueEvents("dnsRecordCheck-queue" , {
-    connection
+    connection: { ...connection }
 })
 
 

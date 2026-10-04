@@ -18,7 +18,7 @@ const lightHouseworker = new Worker("lighthouse-queue" , async (job) => {
     try{
 
         const result =  await runPageSpeed(targetUrl)
-         if(!result ||  !result.success ) {return { status : "failed" }}
+        if(!result || result.status === "failed") {return { status : "failed" }}
         console.log("lighthouse result : ", result)
 
         return {...result , roomId} 
@@ -30,7 +30,7 @@ const lightHouseworker = new Worker("lighthouse-queue" , async (job) => {
 
 
 },{
-    connection,
+    connection: { ...connection },
     concurrency :10 ,
 }) 
 
