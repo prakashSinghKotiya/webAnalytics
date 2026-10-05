@@ -1,29 +1,28 @@
 import { Queue } from "bullmq";
-import connection from "../config/redis.js"
+import { sharedRedisConnection } from "../config/redis.js";
 
 const defaultJobOptions = {
-  attempts: 3, //if job fails, it will be retried 3 times
+  attempts: 3, // if job fails, it will be retried 3 times
   backoff: {
     type: "exponential",
-    delay: 1000, // after every retry delay will be doubled (1s, 2s, 4s)
+    delay: 1000, // delay doubled on each retry (1s, 2s, 4s)
   },
-  removeOnComplete: { age: 60, count: 1000 }, 
-  removeOnFail: { age: 60, count: 1000 },   //  latest 20 failed jobs will be kept in Redis for debugging purposes. Older failed jobs will be removed automatically.
+  removeOnComplete: { age: 60, count: 1000 },
+  removeOnFail: { age: 60, count: 1000 },
 };
 
-
 export const indiaTtfbQueue = new Queue("ttfb-india", {
-    connection: { ...connection },
+    connection: sharedRedisConnection,
     defaultJobOptions,
 });
 
 export const europeTtfbQueue = new Queue("ttfb-europe", {
-    connection: { ...connection },
+    connection: sharedRedisConnection,
     defaultJobOptions,
 });
 
 export const usaTtfbQueue = new Queue("ttfb-usa", {
-    connection: { ...connection },
+    connection: sharedRedisConnection,
     defaultJobOptions,
 });
 

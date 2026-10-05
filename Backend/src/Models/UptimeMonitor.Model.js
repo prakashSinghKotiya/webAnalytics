@@ -28,15 +28,25 @@ const uptimeMonitorSchema = new Schema(
             enum: ["active", "paused"],
             default: "active"
         },
-           createdAt: { // ttl index 
-    type: Date,
-    default: Date.now,
-    expires:  60 * 60 * 24 * 30, // 30 days
-  },
+
+        lastResult: {
+            type: Schema.Types.Mixed,
+            default: null,
+        },
+
+        lastCheckedAt: {
+            type: Date,
+            default: null,
+        },
+
+ 
     },
     {
         timestamps: true
     }
 );
+
+uptimeMonitorSchema.index({ userId: 1, url: 1 }, { unique: true });
+
 
 export const UptimeMonitor = model( "UptimeMonitor", uptimeMonitorSchema );

@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
-import connection from "../config/redis.js";
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { measureTTFB } from "../Services/ttfb.Service.js";
+import { Ttfb } from "../Models/Ttfb.Model.js";
 
 export const startTtfbWorker = (region) => {
   const queueName = `ttfb-${region}`;
@@ -10,40 +11,72 @@ export const startTtfbWorker = (region) => {
     async (job) => {
       console.log(`Processing TTFB job ${job.id} for region: ${region}`);
 
-      const { targetUrl, roomId } = job.data;
-      if (!targetUrl || !roomId) {
-        throw new Error(`Invalid job data. TargetUrl: ${targetUrl}, roomId: ${roomId}`);
+      const { targetUrl, userId, ttfbdbId, region: jobRegion } = job.data;
+      const targetRegion = jobRegion || region;
+
+      if (!targetUrl || !ttfbdbId || !userId) {
+        throw new Error(
+          `Invalid job data. TargetUrl: ${targetUrl}, ttfbdbId: ${ttfbdbId}, userId: ${userId}`
+        );
       }
 
       try {
         const result = await measureTTFB(targetUrl);
-        console.log(`[${region}] TTFB result:`, result);
+        console.log(`[${targetRegion}] TTFB result:`, result);
 
-        if (!result || !result.success) {
-          return { region, roomId, ...result, status: "failed" };
+        const isSuccess = Boolean(result && result.success);
+
+        // Update MongoDB document with measurement result
+        await Ttfb.findByIdAndUpdate(ttfbdbId, {
+          status: isSuccess ? "completed" : "failed",
+          result,
+          error: isSuccess ? null : (result?.error || "TTFB measurement failed"),
+          completedAt: new Date(),
+        });
+
+        return {
+          jobId: job.id,
+          userId,
+          ttfbdbId,
+          region: targetRegion,
+          result,
+          status: isSuccess ? "completed" : "failed",
+        };
+      } catch (error) {
+        console.error(`[${targetRegion}] Error processing job ${job.id}:`, error);
+
+        if (ttfbdbId) {
+          try {
+            await Ttfb.findByIdAndUpdate(ttfbdbId, {
+              status: "failed",
+              error: error.message || "Worker execution failed",
+              completedAt: new Date(),
+            });
+          } catch (dbErr) {
+            console.error(`[${targetRegion}] DB update failed on job error:`, dbErr);
+          }
         }
 
-        return { region, roomId, ...result };
-      } catch (error) {
-        console.error(`[${region}] Error processing job:`, error);
         throw error;
       }
     },
     {
-      connection: { ...connection },
+      connection: sharedWorkerRedisConnection,
       concurrency: 10,
     }
   );
 
   worker.on("completed", (job, result) => {
-    console.log(`[${region}] Job ${job.id} completed:`, result);
+    console.log(`[${region}] Job ${job.id} completed successfully`);
   });
 
   worker.on("failed", (job, error) => {
-    console.error(`[${region}] Job ${job?.id} failed:`, error.message);
+    console.error(`[${region}] Job ${job?.id} failed:`, error?.message);
   });
 
   worker.on("error", (error) => {
-    console.error(`[${region}] Worker error:`, error.message);
+    console.error(`[${region}] Worker error:`, error?.message);
   });
+
+  return worker;
 };

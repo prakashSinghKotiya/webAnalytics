@@ -1,79 +1,81 @@
-import { indiaTtfbQueue, europeTtfbQueue, usaTtfbQueue } from "../../queue/ttfb.queue.js";
 import { europeTtfbQueueEvent, indiaTtfbQueueEvent, usaTtfbQueueEvent } from "../../queue/ttfb.QeventListner.js";
+import { Ttfb } from "../../Models/Ttfb.Model.js";
 
-// Handling bullmq queue events when jobs complete or fail
+// Handling BullMQ queue events when jobs complete or fail
 export const setupTtfbQueueResult = (io) => {
-  handleQueueEvent(indiaTtfbQueueEvent, indiaTtfbQueue, "india", io);
-  handleQueueEvent(europeTtfbQueueEvent, europeTtfbQueue, "europe", io);
-  handleQueueEvent(usaTtfbQueueEvent, usaTtfbQueue, "usa", io);
+  handleQueueEvent(indiaTtfbQueueEvent, "india", io);
+  handleQueueEvent(europeTtfbQueueEvent, "europe", io);
+  handleQueueEvent(usaTtfbQueueEvent, "usa", io);
 };
 
-export const handleQueueEvent = (queueEvent, queue, region, io) => {
-  try {
-    queueEvent.on("completed", async ({ jobId, returnvalue, returnValue }) => {
-      console.log(`[TTFB ${region}] job ${jobId} completed`);
+export const handleQueueEvent = (queueEvent, region, io) => {
+  // Connection / stream error handler to avoid unhandled EventEmitter exceptions
+  queueEvent.on("error", (err) => {
+    console.error(`[TTFB ${region}] QueueEvents error:`, err);
+  });
 
-      let data = returnvalue || returnValue;
-      if (typeof data === "string") {
-        try {
-          data = JSON.parse(data);
-        } catch (e) {
-          console.error(`[TTFB ${region}] Failed to parse returnvalue JSON:`, e);
-        }
+  // Completed job event - extract directly from worker returnvalue (no Redis getJob call needed)
+  queueEvent.on("completed", async ({ jobId, returnvalue, returnValue }) => {
+    try {
+      let raw = returnvalue || returnValue;
+      let data = typeof raw === "string" ? JSON.parse(raw) : raw;
+
+      if (!data) {
+        console.warn(`[TTFB ${region}] No returnvalue data found for job ${jobId}`);
+        return;
       }
 
-      // Ensure userRoom is resolved either from payload or from the BullMQ job in Redis
-      let userRoom = data?.roomId;
-      if (!userRoom && queue) {
-        try {
-          const job = await queue.getJob(jobId);
-          userRoom = job?.data?.roomId;
-        } catch (e) {
-          console.error(`[TTFB ${region}] Failed to fetch job for roomId:`, e);
-        }
+      const userId = data.userId;
+      if (!userId) {
+        console.warn(`[TTFB ${region}] No userId present in job ${jobId} returnvalue`);
+        return;
       }
 
-      console.log(`[TTFB ${region}] emitting ttfbCompleted to room:`, userRoom, "data:", data);
+      const userRoom = `user:${userId}`;
 
-      if (userRoom) {
+      io.to(userRoom).emit("ttfbCompleted", {
+        jobId,
+        roomId: userRoom,
+        region: data.region || region,
+        result: data.result,
+        status: data.status || "completed",
+      });
+    } catch (err) {
+      console.error(`[TTFB ${region}] Error processing completed event for job ${jobId}:`, err);
+    }
+  });
+
+  // Failed job event - uses MongoDB primary key (jobId === ttfbdbId) without Redis getJob
+  queueEvent.on("failed", async ({ jobId, failedReason }) => {
+    console.error(`[TTFB ${region}] Job ${jobId} failed:`, failedReason);
+
+    try {
+      const ttfbDoc = await Ttfb.findByIdAndUpdate(
+        jobId,
+        {
+          status: "failed",
+          error: failedReason || "TTFB measurement failed",
+          completedAt: new Date(),
+        },
+        { new: true }
+      ).lean();
+
+      if (ttfbDoc?.userId) {
+        const userRoom = `user:${ttfbDoc.userId}`;
         io.to(userRoom).emit("ttfbCompleted", {
-          jobId: jobId,
+          jobId,
           roomId: userRoom,
-          result: data,
-          region: region,
-        });
-      } else {
-        console.warn(`[TTFB ${region}] Warning: No userRoom found for job ${jobId}`);
-      }
-    });
-
-    queueEvent.on("failed", async ({ jobId, failedReason }) => {
-      console.log(`[TTFB ${region}] job ${jobId} failed:`, failedReason);
-
-      let userRoom = null;
-      if (queue) {
-        try {
-          const job = await queue.getJob(jobId);
-          userRoom = job?.data?.roomId;
-        } catch (e) {
-          console.error(`[TTFB ${region}] Failed to get failed job:`, e);
-        }
-      }
-
-      if (userRoom) {
-        io.to(userRoom).emit("ttfbCompleted", {
-          jobId: jobId,
-          roomId: userRoom,
-          region: region,
+          region: ttfbDoc.region || region,
           result: {
-            region,
+            region: ttfbDoc.region || region,
             status: "failed",
             error: failedReason || "TTFB measurement failed",
           },
+          status: "failed",
         });
       }
-    });
-  } catch (err) {
-    console.error(`[TTFB ${region}] Error in handleQueueEvent:`, err);
-  }
+    } catch (err) {
+      console.error(`[TTFB ${region}] Error processing failed event for job ${jobId}:`, err);
+    }
+  });
 };

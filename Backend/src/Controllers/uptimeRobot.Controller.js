@@ -1,4 +1,5 @@
 import { UptimeMonitor } from "../Models/UptimeMonitor.Model.js";
+import { UptimeResult } from "../Models/UptimeResults.Model.js";
 
 import {
     createUptimeScheduler,
@@ -292,27 +293,163 @@ export const deleteMonitor = async (req, res) => {
 
 
 
-// GET
-
+// GET: Fetch all monitors for current user with optional status filter & pagination
 export const getMonitors = async (req, res) => {
-
     try {
-        const id = req.user._id;
-        if(!id){ return res.status(400).json({error : "userId is required"})}
+        const userId = req.user._id;
+        const { status, page = 1, limit = 20 } = req.query;
 
-        const monitors = await UptimeMonitor.find({userId : id }).lean()
-            .sort({ createdAt: -1 })
-            .lean(); 
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+        const skip = (pageNum - 1) * limitNum;
+
+        const query = { userId };
+        if (status && ALLOWED_STATUSES.has(status)) {
+            query.status = status;
+        }
+
+        const [monitors, total] = await Promise.all([
+            UptimeMonitor.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            UptimeMonitor.countDocuments(query),
+        ]);
 
         return res.status(200).json({
-            monitors
+            success: true,
+            monitors,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total,
+                totalPages: Math.ceil(total / limitNum),
+            },
         });
-
     } catch (error) {
         console.error("Error fetching monitors:", error);
 
         return res.status(500).json({
-            error: "An internal server error occurred while fetching monitors"
+            success: false,
+            error: "An internal server error occurred while fetching monitors",
+        });
+    }
+};
+
+/**
+ * GET /uptime/monitor/:id
+ * Scalable controller to fetch the details of a current running / active monitor
+ * including its latest status, interval, configuration, and lastResult.
+ */
+export const getRunningMonitorDetails = async (req, res) => {
+    try {
+        const userId = req.user._id;
+        const { id } = req.params;
+
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                error: "Monitor ID is required",
+            });
+        }
+
+        // Query by monitorId and userId to enforce strict multi-tenant ownership
+        const monitor = await UptimeMonitor.findOne({
+            _id: id,
+            userId,
+        }).lean();
+
+        if (!monitor) {
+            return res.status(404).json({
+                success: false,
+                error: "Uptime monitor not found",
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            monitor,
+        });
+    } catch (error) {
+        console.error("Error fetching running monitor details:", error);
+        return res.status(500).json({
+            success: false,
+            error: "Failed to fetch monitor details",
+        });
+    }
+};
+
+/**
+ * GET /uptime/monitor/:id/results
+ * Scalable controller to fetch recent results of a specific monitor from UptimeResult model.
+ * Supports pagination (page, limit) and optional date filtering.
+ */
+export const getRecentMonitorResults = async (req, res) => {
+    try {
+        const userId = req.user._id;
+        const { id } = req.params;
+        const { page = 1, limit = 50, status } = req.query;
+
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                error: "Monitor ID is required",
+            });
+        }
+
+        // 1. Verify monitor exists and belongs to the user
+        const monitorExists = await UptimeMonitor.exists({
+            _id: id,
+            userId,
+        });
+
+        if (!monitorExists) {
+            return res.status(404).json({
+                success: false,
+                error: "Uptime monitor not found",
+            });
+        }
+
+        const pageNum = Math.max(1, parseInt(page, 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+        const skip = (pageNum - 1) * limitNum;
+
+        // Uses compound index { monitorId: 1, checkedAt: -1 }
+        const query = {
+            monitorId: id,
+            userId,
+        };
+
+        if (status) {
+            query["result.status"] = status.toUpperCase();
+        }
+
+        const [results, total] = await Promise.all([
+            UptimeResult.find(query)
+                .sort({ checkedAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .lean(),
+            UptimeResult.countDocuments(query),
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            monitorId: id,
+            results,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total,
+                totalPages: Math.ceil(total / limitNum),
+            },
+        });
+    } catch (error) {
+        console.error("Error fetching recent monitor results:", error);
+        return res.status(500).json({
+            success: false,
+            error: "Failed to fetch monitor results",
         });
     }
 };

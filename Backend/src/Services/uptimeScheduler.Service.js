@@ -27,6 +27,8 @@ export const createUptimeScheduler = async (monitor,roomId) => {
     console.log("MONITOR" ,monitor)
     
     const schedulerId = `uptime-monitor:${monitor._id}`; // Uptime monitor model id
+    const userId = monitor.userId?.toString();
+    const targetRoomId = roomId || (userId ? `user:${userId}` : null);
 
     const job = await uptimeMonitorQueue.upsertJobScheduler(  // see adding jobs inside that queue after every interval and worker will run immidately seeing a new job .
         schedulerId, 
@@ -36,7 +38,7 @@ export const createUptimeScheduler = async (monitor,roomId) => {
         {
             name:"uptime-scheduler-event",  // individual job (name) inside the main queue ie uptimeRobot-india
 
-            data: {  monitorId: monitor._id.toString(), url: monitor.url , roomId:roomId },
+            data: {  monitorId: monitor._id.toString(), userId, url: monitor.url, roomId: targetRoomId },
 
             opts: {   attempts: 3, // if failed try 3 times 
                     backoff: { type: "exponential",  delay: 5000 }, // if failing try after 5 seconds then double 
@@ -48,7 +50,7 @@ export const createUptimeScheduler = async (monitor,roomId) => {
     return {
         schedulerId,
         jobId: job?.id,
-        roomId
+        roomId: targetRoomId
     };
 };
 
