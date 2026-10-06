@@ -1,58 +1,98 @@
 import { Worker } from "bullmq";
-import connection from "../config/redis.js"
-
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { runPageSpeed } from "../Services/psInsight.Service.js";
+import { Lighthouse } from "../Models/Lighthouse.Model.js";
 
+const lightHouseworker = new Worker(
+  "lighthouse-queue",
+  async (job) => {
+    console.log(`Processing Lighthouse job ${job.id} for:`, job.data);
 
-const lightHouseworker = new Worker("lighthouse-queue" , async (job) => {
-    console.log("Processing lighthouse for :", job.data);
+    const {
+      targetUrl,
+      userId,
+      lighthousedbId,
+      ligthouseId,
+      strategy = "mobile",
+    } = job.data;
+    const dbId = lighthousedbId || ligthouseId;
 
-    if (job.name !== "lighthouse-queue" ) { return;  }
-
-    const {targetUrl , roomId} = job.data
-     if(!targetUrl || !roomId) {
-        throw new Error(`Invalid job data.: ${targetUrl} , roomId : ${roomId} `); } 
-
-
-
-    try{
-
-        const result =  await runPageSpeed(targetUrl)
-        if(!result || result.status === "failed") {return { status : "failed" }}
-        console.log("lighthouse result : ", result)
-
-        return {...result , roomId} 
-
-    }catch(err){
-        console.log(err)
-        throw new Error(`Lighthouse job failed: ${err.message}`)
+    if (!targetUrl || !dbId || !userId) {
+      throw new Error(
+        `Invalid job data. targetUrl: ${targetUrl}, lighthousedbId: ${dbId}, userId: ${userId}`
+      );
     }
 
+    try {
+      // Mark as processing in DB
+      await Lighthouse.findByIdAndUpdate(dbId, {
+        status: "processing",
+      });
 
-},{
-    connection: { ...connection },
-    concurrency :10 ,
-}) 
+      const result = await runPageSpeed(targetUrl, { strategy });
 
+      const isSuccess = Boolean(result && result.status !== "failed");
 
+      // Save result and status in MongoDB
+      await Lighthouse.findByIdAndUpdate(dbId, {
+        status: isSuccess ? "completed" : "failed",
+        result,
+        error: isSuccess ? null : (result?.error || "Lighthouse analysis failed"),
+        completedAt: new Date(),
+      });
 
-    lightHouseworker.on("failed", (job, error) => {
+      console.log(`[Lighthouse] Job ${job.id} completed successfully`);
 
-     console.error(`Uptime job ${job?.id} failed:`, error.message );
+      return {
+        jobId: job.id,
+        userId,
+        lighthousedbId: dbId,
+        strategy,
+        result,
+        status: isSuccess ? "completed" : "failed",
+      };
+    } catch (err) {
+      console.error(`[Lighthouse] Error processing job ${job.id}:`, err);
 
-            });
+      if (dbId) {
+        try {
+          await Lighthouse.findByIdAndUpdate(dbId, {
+            status: "failed",
+            error: err.message || "Lighthouse analysis failed",
+            completedAt: new Date(),
+          });
+        } catch (dbErr) {
+          console.error("[Lighthouse] DB update failed on job error:", dbErr);
+        }
+      }
 
+      throw err;
+    }
+  },
+  {
+    connection: sharedWorkerRedisConnection,
+    concurrency: 10,
+  }
+);
 
-    lightHouseworker.on("error", (error) => { 
-        console.error( "Uptime worker error:", error ); });
+lightHouseworker.on("completed", (job) => {
+  console.log(`[Lighthouse] Job ${job?.id} completed successfully`);
+});
 
+lightHouseworker.on("failed", (job, error) => {
+  console.error(`[Lighthouse] Job ${job?.id} failed:`, error?.message);
+});
 
- process.on('SIGINT', async () => {
-    console.log("Shutting down worker safely...");
-    await lightHouseworker.close();
-    lightHouseworker.removeAllListeners();  //clear all listeners
-    process.exit(0);
-});       
+lightHouseworker.on("error", (error) => {
+  console.error("[Lighthouse] Worker error:", error?.message);
+});
 
+process.on("SIGINT", async () => {
+  console.log("Shutting down Lighthouse worker safely...");
+  await lightHouseworker.close();
+  lightHouseworker.removeAllListeners();
+  process.exit(0);
+});
 
 export default lightHouseworker;
+export { lightHouseworker };

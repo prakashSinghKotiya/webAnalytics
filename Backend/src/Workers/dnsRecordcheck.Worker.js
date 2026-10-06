@@ -1,60 +1,92 @@
 import { Worker } from "bullmq";
-import connection from "../config/redis.js"
-
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { checkDnsRecords } from "../Services/dnsRecordtype.Service.js";
-import { dnsRecordCheckListener } from "../queue/dnsRecordCheck.Queue.js";
+import { DnsRecord } from "../Models/dnsRecord.Model.js";
 
+const dnsRecordCheck = new Worker(
+  "dnsRecordCheck-queue",
+  async (job) => {
+    console.log(`Processing DNS record job ${job.id} for:`, job.data);
 
-const dnsRecordCheck = new Worker("dnsRecordCheck-queue" , async (job) => {
-    console.log("Processing dnsRecordCheck for :", job.data);
+    const { targetUrl, userId, dnsRecordId, recordId } = job.data;
+    const dbId = dnsRecordId || recordId;
 
-    if (job.name !== "dnsRecordCheck-queue" ) { return;  }
-
-    const {targetUrl , roomId} = job.data
-    if(!targetUrl || !roomId) {
-        throw new Error(`Invalid job data. MonitorId: ${targetUrl} , roomId : ${roomId} `); }   
-
-
-
-    try{
-
-        const result =  await checkDnsRecords(targetUrl)
-        if(!result || result.status === "failed") {return { status : "failed" }}
-        console.log("dnsRecordCheck result : ", result)
-
-        return {...result , roomId} 
-
-    }catch(err){
-        console.log(err)
-        throw new Error(`DnsRecordCheck job failed: ${err.message}`)
+    if (!targetUrl || !dbId || !userId) {
+      throw new Error(
+        `Invalid job data. TargetUrl: ${targetUrl}, dnsRecordId: ${dbId}, userId: ${userId}`
+      );
     }
 
+    try {
+      // Mark as processing in DB
+      await DnsRecord.findByIdAndUpdate(dbId, {
+        status: "processing",
+      });
 
-},{
-    connection: { ...connection },
-    concurrency :10 ,
-}) 
+      const result = await checkDnsRecords(targetUrl);
+      console.log(`[dnsRecordCheck] Job ${job.id} result:`, result);
 
+      const isSuccess = Boolean(result && (!result.status || result.status !== "failed"));
 
+      // Update MongoDB document with DNS lookup result
+      await DnsRecord.findByIdAndUpdate(dbId, {
+        status: isSuccess ? "completed" : "failed",
+        result,
+        error: isSuccess ? null : (result?.error || "DNS lookup failed"),
+        completedAt: new Date(),
+      });
 
-    dnsRecordCheck.on("failed", (job, error) => {
+      console.log(`[dnsRecordCheck] Job ${job.id} completed successfully`);
 
-     console.error(`DnsRecordCheck job ${job?.id} failed:`, error.message );
+      return {
+        jobId: job.id,
+        userId,
+        dnsRecordId: dbId,
+        result,
+        status: isSuccess ? "completed" : "failed",
+      };
+    } catch (error) {
+      console.error(`[dnsRecordCheck] Error processing job ${job.id}:`, error);
 
-            });
+      if (dbId) {
+        try {
+          await DnsRecord.findByIdAndUpdate(dbId, {
+            status: "failed",
+            error: error.message || "DNS lookup failed",
+            completedAt: new Date(),
+          });
+        } catch (dbErr) {
+          console.error("[dnsRecordCheck] DB update failed on job error:", dbErr);
+        }
+      }
 
+      throw error;
+    }
+  },
+  {
+    connection: sharedWorkerRedisConnection,
+    concurrency: 10,
+  }
+);
 
-    dnsRecordCheck.on("error", (error) => { 
-        console.error( "DnsRecordCheck worker error:", error ); });
+dnsRecordCheck.on("completed", (job) => {
+  console.log(`[dnsRecordCheck] Job ${job?.id} completed successfully`);
+});
 
+dnsRecordCheck.on("failed", (job, error) => {
+  console.error(`[dnsRecordCheck] Job ${job?.id} failed:`, error?.message);
+});
 
- process.on('SIGINT', async () => {
-    console.log("Shutting down worker safely...");
-    dnsRecordCheck.removeAllListeners()
-    await dnsRecordCheck.close();
-    await dnsRecordCheckListener.close();  //clear all listeners
-    process.exit(0);
-});       
+dnsRecordCheck.on("error", (error) => {
+  console.error("[dnsRecordCheck] Worker error:", error?.message);
+});
 
+process.on("SIGINT", async () => {
+  console.log("Shutting down DNS worker safely...");
+  await dnsRecordCheck.close();
+  dnsRecordCheck.removeAllListeners();
+  process.exit(0);
+});
 
 export default dnsRecordCheck;
+export { dnsRecordCheck };

@@ -1,6 +1,9 @@
-import {  QueueEvents } from "bullmq";
-import connection from "../config/redis.js"
+import { QueueEvents } from "bullmq";
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 
-export const LighthouequeueListner = new QueueEvents("lighthouse-queue" , {
-    connection: { ...connection }
-})
+export const LighthouequeueListner = new QueueEvents("lighthouse-queue", {
+  connection: sharedWorkerRedisConnection,
+});
+
+export const lighthouseQueueEvents = LighthouequeueListner;
+export default LighthouequeueListner;

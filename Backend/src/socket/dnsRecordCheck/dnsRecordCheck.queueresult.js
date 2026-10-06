@@ -1,56 +1,114 @@
-
 import { dnsRecordCheck, dnsRecordCheckListener } from "../../queue/dnsRecordCheck.Queue.js";
+import { DnsRecord } from "../../Models/dnsRecord.Model.js";
 
+// Handling BullMQ queue events when DNS record jobs complete or fail
+export const dnsRecordCheckResultHandler = (io) => {
+  handleDnsQueueEvent(dnsRecordCheckListener, io);
+};
 
+export const setupDnsRecordQueueResult = dnsRecordCheckResultHandler;
 
-export const dnsRecordCheckResultHandler =(io) => {
+export const handleDnsQueueEvent = (queueEvent, io) => {
+  // Connection / stream error handler to avoid unhandled EventEmitter exceptions
 
-    dnsRecordCheckEvent(dnsRecordCheckListener ,io)
+  queueEvent.on("error", (err) => {
+    console.error("[dnsRecordCheck] QueueEvents error:", err);
+  });
 
-}
+  
+  queueEvent.on("completed", async ({ jobId, returnvalue, returnValue }) => {
+    try {
+      let raw = returnvalue || returnValue;
+      let data = typeof raw === "string" ? JSON.parse(raw) : raw;
 
+      if (!data) {
+        console.warn(`[dnsRecordCheck] No returnvalue data found for job ${jobId}`);
+        return;
+      }
 
-export const dnsRecordCheckEvent = (event , io) =>{
+      const userId = data.userId;
+      if (!userId) {
+        console.warn(`[dnsRecordCheck] No userId present in job ${jobId} returnvalue`);
+        return;
+      }
 
-    try{
-         event.on("completed", ({jobId , returnvalue, returnValue}) => {
-        console.log(`dnsRecordCheck job ${jobId} completed`);
-        const data = returnvalue || returnValue;
-        const userRoom =  data?.roomId
-      //  const userRoom = `user:${room}`;
-        
+      const userRoom = `user:${userId}`;
+      const payload = {
+        jobId,
+        dnsRecordId: data.dnsRecordId || jobId,
+        roomId: userRoom,
+        result: data.result,
+        status: data.status || "completed",
+      };
 
-        io.to(userRoom).emit("dnsRecordCheck-completed", { jobId: jobId, result: data } )
-        
-        console.log(`result sent to room: ${userRoom}`)
-    
+      // Emit to user room (supporting both naming conventions for compatibility)
+      io.to(userRoom).emit("dnsRecordCompleted", payload);
+      io.to(userRoom).emit("dnsRecordCheck-completed", payload);
 
-        })
-
-
-
-         event.on("failed", async({ jobId, failedReason }) => {
-
-            console.log(`dnsRecordCheck job ${jobId} failed`);
-
-            const job = await dnsRecordCheck.getJob(jobId)
-             const userRoom = job?.data?.roomId;
-          //   const userRoom = `user:${roomId}`
-
-            console.log("Reason:", failedReason);
-
-            io.to(userRoom).emit("dnsRecordCheck-failed", {
-                jobId,
-                error: failedReason
-            });
-        });
-
-
-
-
-    }catch(err){
-        console.log("Error: dnsRecordCheck error !!!", err)
+      console.log(`[dnsRecordCheck] Result emitted to room: ${userRoom} for job: ${jobId}`);
+    } catch (err) {
+      console.error(`[dnsRecordCheck] Error processing completed event for job ${jobId}:`, err);
     }
+  });
 
-   
-}
+  // Failed 
+  queueEvent.on("failed", async ({ jobId, failedReason }) => {
+    console.error(`[dnsRecordCheck] Job ${jobId} failed:`, failedReason);
+
+    try {
+      let dnsDoc = null;
+
+      if (jobId) {
+        dnsDoc = await DnsRecord.findByIdAndUpdate(
+          jobId,
+          {
+            status: "failed",
+            error: failedReason || "DNS record check failed",
+            completedAt: new Date(),
+          },
+          { new: true }
+        ).lean();
+      }
+
+      let userId = dnsDoc?.userId?.toString();
+      let userRoom = userId ? `user:${userId}` : null;
+
+      // Fallback: If DB doc wasn't found or userId missing, check Redis job data
+      if (!userRoom) {
+        try {
+          const job = await dnsRecordCheck.getJob(jobId);
+          if (job?.data?.userId) {
+            userRoom = `user:${job.data.userId}`;
+          } else if (job?.data?.roomId) {
+            userRoom = job.data.roomId;
+          }
+        } catch (jobErr) {
+          console.error(`[dnsRecordCheck] Error fetching job ${jobId} from queue on failure:`, jobErr);
+        }
+      }
+
+      if (userRoom) {
+        const failPayload = {
+          jobId,
+          dnsRecordId: jobId,
+          roomId: userRoom,
+          result: {
+            status: "failed",
+            error: failedReason || "DNS record check failed",
+          },
+          error: failedReason || "DNS record check failed",
+          status: "failed",
+        };
+
+        io.to(userRoom).emit("dnsRecordCompleted", failPayload);
+        io.to(userRoom).emit("dnsRecordCheck-failed", failPayload);
+
+        console.log(`[dnsRecordCheck] Failure event emitted to room: ${userRoom} for job: ${jobId}`);
+      }
+    } catch (err) {
+      console.error(`[dnsRecordCheck] Error processing failed event for job ${jobId}:`, err);
+    }
+  });
+};
+
+

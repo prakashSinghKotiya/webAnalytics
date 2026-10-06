@@ -13,7 +13,7 @@ import { dnsRecordCheckResultHandler } from "./socket/dnsRecordCheck/dnsRecordCh
 
 import "./Workers/ttfbStart.worker.js"
 import { socketAuthMiddleware } from "./Middleware/Socket.middleware.js";
-import { sendTtfbResult } from "./socket/ttfb/ttfb.socketevent.js";
+
 import { redirectQueueResultHandler } from "./socket/Redirect/RedirectCheck.queueresult.js";
 import { whoisLookupResultHandler } from "./socket/WhoisLookup/whoisLookup.queueresult.js";
 
@@ -42,12 +42,6 @@ io.on("connection", (socket) => {
      socket.join(userRoom);
 
 
-    
-    sendTtfbResult(io, socket);
-
-    // sendUptimeResult(io, socket)
-
-    // LighthouseConnection(io , socket)
     
 
     socket.on("disconnect", () => {
