@@ -337,11 +337,9 @@ export const getMonitors = async (req, res) => {
     }
 };
 
-/**
- * GET /uptime/monitor/:id
- * Scalable controller to fetch the details of a current running / active monitor
- * including its latest status, interval, configuration, and lastResult.
- */
+
+
+
 export const getRunningMonitorDetails = async (req, res) => {
     try {
         const userId = req.user._id;
@@ -380,11 +378,9 @@ export const getRunningMonitorDetails = async (req, res) => {
     }
 };
 
-/**
- * GET /uptime/monitor/:id/results
- * Scalable controller to fetch recent results of a specific monitor from UptimeResult model.
- * Supports pagination (page, limit) and optional date filtering.
- */
+
+
+
 export const getRecentMonitorResults = async (req, res) => {
     try {
         const userId = req.user._id;

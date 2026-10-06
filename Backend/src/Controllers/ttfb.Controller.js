@@ -148,10 +148,10 @@ export const allRegionttfbFinder = async (req, res) => {
   }
 };
 
-/**
- * Get TTFB records for the authenticated user that have results.
- * Supports query params: page, limit, url, region, status.
- */
+
+
+
+
 export const getTtfbResults = async (req, res) => {
   try {
     const userId = req.user._id;

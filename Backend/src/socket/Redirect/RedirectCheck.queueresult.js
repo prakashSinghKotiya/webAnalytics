@@ -10,7 +10,7 @@ export const redirectQueueResultHandler = (io) => {
 export const setupRedirectQueueResult = redirectQueueResultHandler;
 
 export const handleRedirectQueueEvent = (queueEvent, io) => {
-  // Connection / stream error handler to avoid unhandled EventEmitter exceptions
+  // Connection 
   queueEvent.on("error", (err) => {
     console.error("[redirectCheck] QueueEvents error:", err);
   });
@@ -79,9 +79,9 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
     }
   });
 
-  // Failed job event - uses MongoDB primary key (jobId === redirectCheckId) without Redis roundtrip
+  // Failed job event 
   queueEvent.on("failed", async ({ jobId, failedReason }) => {
-    console.error(`[TTFB ${region}] Job ${jobId} failed:`, failedReason);
+    console.error(`[RedirectCheck ${region}] Job ${jobId} failed:`, failedReason);
 
     try {
       const redirectDoc = await RedirectCheck.findByIdAndUpdate(

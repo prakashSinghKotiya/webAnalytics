@@ -15,7 +15,7 @@ export const handleQueueEvent = (queueEvent, io) => {
     console.error("[Lighthouse] QueueEvents error:", err);
   });
 
-  // Completed job event - extract directly from worker returnvalue (no Redis getJob call needed)
+  // Completed job event 
   queueEvent.on("completed", async ({ jobId, returnvalue, returnValue }) => {
     try {
       let raw = returnvalue || returnValue;
@@ -51,7 +51,7 @@ export const handleQueueEvent = (queueEvent, io) => {
     }
   });
 
-  // Failed job event - uses MongoDB primary key (jobId === lighthousedbId) without Redis getJob
+  // Failed job event 
   queueEvent.on("failed", async ({ jobId, failedReason }) => {
     console.error(`[Lighthouse] Job ${jobId} failed:`, failedReason);
 
