@@ -26,6 +26,7 @@ try {
 } catch (err) { console.error("Database connection failed: ", err); }
 
 export const app = express()
+app.set('trust proxy', 1)
 app.use(cookieParser(process.env.COOKIE_SECRET))
 app.use(express.json())
 app.use(cors({

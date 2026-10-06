@@ -81,64 +81,35 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
 
   // Failed job event - uses MongoDB primary key (jobId === redirectCheckId) without Redis roundtrip
   queueEvent.on("failed", async ({ jobId, failedReason }) => {
-    console.error(`[redirectCheck] Job ${jobId} failed:`, failedReason);
+    console.error(`[TTFB ${region}] Job ${jobId} failed:`, failedReason);
 
     try {
-      let redirectDoc = null;
-
-      // Update DB record if valid ObjectId
-      if (jobId) {
-        redirectDoc = await RedirectCheck.findByIdAndUpdate(
-          jobId,
-          {
-            status: "failed",
-            error: failedReason || "Redirect check failed",
-            completedAt: new Date(),
-          },
-          { new: true }
-        ).lean();
-      }
-
-      let userId = redirectDoc?.userId?.toString();
-      let userRoom = userId ? `user:${userId}` : null;
-
-      // Fallback: If DB doc wasn't found or userId missing, check Redis job data
-      if (!userRoom) {
-        try {
-          const job = await redirectQueue.getJob(jobId);
-          if (job?.data?.userId) {
-            userRoom = `user:${job.data.userId}`;
-          } else if (job?.data?.roomId) {
-            userRoom = job.data.roomId;
-          }
-        } catch (jobErr) {
-          console.error(`[redirectCheck] Error fetching job ${jobId} from queue on failure:`, jobErr);
-        }
-      }
-
-      if (userRoom) {
-        const failPayload = {
-          jobId,
-          redirectCheckId: jobId,
-          recordId: jobId,
-          roomId: userRoom,
-          result: {
-            status: "failed",
-            error: failedReason || "Redirect check failed",
-          },
-          error: failedReason || "Redirect check failed",
+      const redirectDoc = await RedirectCheck.findByIdAndUpdate(
+        jobId,
+        {
           status: "failed",
-        };
+          error: failedReason || "Redirect check failed",
+          completedAt: new Date(),
+        },
+        { new: true }
+      ).lean();
 
-        io.to(userRoom).emit("redirectCheckFailed", failPayload);
-        io.to(userRoom).emit("redirectQueue-failed", failPayload);
-
-        console.log(`[redirectCheck] Failure event emitted to room: ${userRoom} for job: ${jobId}`);
-      } else {
-        console.warn(`[redirectCheck] Unable to resolve room for failed job ${jobId}`);
+      if (redirectDoc?.userId) {
+        const userRoom = `user:${redirectDoc.userId}`;
+        io.to(userRoom).emit("redirectCheckFailed", {
+          jobId,
+          roomId: userRoom,
+          region: redirectDoc.region || region,
+          result: {
+            region: redirectDoc.region || region,
+            status: "failed",
+            error: failedReason || "Redirect check failed",
+          },
+          status: "failed",
+        });
       }
     } catch (err) {
-      console.error(`[redirectCheck] Error processing failed event for job ${jobId}:`, err);
+      console.error(`[RedirectCheck ${region}] Error processing failed event for job ${jobId}:`, err);
     }
   });
 };

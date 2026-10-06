@@ -1,5 +1,5 @@
 import { startTtfbWorker } from "./ttfb.Worker.js";
-import lightHouseworker from "./Lighthouse.Worker.js";
+//import lightHouseworker from "./Lighthouse.Worker.js";
 import uptimeWorker from "./uptime.Worker.js";
 import dnsWorker from "./dnsRecordcheck.Worker.js";
 import redirectWorker from "./redirectCheck.Worker.js";
