@@ -30,7 +30,7 @@ app.set('trust proxy', 1)
 app.use(cookieParser(process.env.COOKIE_SECRET))
 app.use(express.json())
 app.use(cors({
-    origin:  process.env.CLIENT_ORIGIN  || 'http://localhost:5174',
+    origin:  process.env.CLIENT_ORIGIN  || 'http://localhost:5173',
     credentials: true,
 }))
 
