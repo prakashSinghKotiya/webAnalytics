@@ -1,5 +1,5 @@
-import { Queue, QueueEvents } from "bullmq";
-import { sharedRedisConnection, sharedWorkerRedisConnection } from "../config/redis.js";
+import { Queue } from "bullmq";
+import { sharedRedisConnection } from "../config/redis.js";
 
 const defaultJobOptions = {
   attempts: 3,
@@ -18,13 +18,6 @@ export const whoisLookup = new Queue("whoisLookup-queue", {
 
 export const whoisLookupQueue = whoisLookup;
 
-// Queue event listener
-export const whoisLookupListener = new QueueEvents("whoisLookup-queue", {
-  connection: sharedWorkerRedisConnection,
-});
-
-export const whoisLookupQueueEvents = whoisLookupListener;
-
 const attachQueueErrorHandler = (queue, name) => {
   queue.on("error", (err) => {
     console.error(`[${name}] Queue Error:`, err);
@@ -32,5 +25,5 @@ const attachQueueErrorHandler = (queue, name) => {
 };
 
 attachQueueErrorHandler(whoisLookup, "whoisLookup-queue");
-attachQueueErrorHandler(whoisLookupListener, "whoisLookup-queue-events");
 
+export default whoisLookup;

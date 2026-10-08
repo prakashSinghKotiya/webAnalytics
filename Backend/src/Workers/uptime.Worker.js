@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { redisConnectionOptions } from "../config/redis.js";
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { checkUrl } from "../Services/uptimeChecker.Service.js";
 import { UptimeMonitor } from "../Models/UptimeMonitor.Model.js";
 import { UptimeResult } from "../Models/UptimeResults.Model.js";
@@ -54,7 +54,7 @@ export const startUptimeWorker = () => {
       };
     },
     {
-      connection: redisConnectionOptions,
+      connection: sharedWorkerRedisConnection,
       concurrency: 10,
     }
   );

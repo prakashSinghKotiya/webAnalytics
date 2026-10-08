@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { redisConnectionOptions } from "../config/redis.js";
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { checkRDAPLookup } from "../Services/WhoisLookup.Service.js";
 import { WhoisLookup } from "../Models/whoisLookup.Model.js";
 
@@ -91,7 +91,7 @@ export const startWhoisWorker = () => {
       }
     },
     {
-      connection: redisConnectionOptions,
+      connection: sharedWorkerRedisConnection,
       concurrency: 10,
     }
   );

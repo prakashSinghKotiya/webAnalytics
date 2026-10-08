@@ -12,11 +12,11 @@ export const redisConnectionOptions = {
   retryStrategy: (times) => Math.min(times * 100, 3000),
 };
 
-// Shared Redis client for BullMQ Queue instances (producers)
-// BullMQ allows non-blocking Queue producers to share a single Redis client connection.
+// Shared Redis client for BullMQ Queue instances (producers) and Worker non-blocking operations.
+// BullMQ requires maxRetriesPerRequest: null for blocking/worker compatibility and client reuse.
 export const sharedRedisConnection = new Redis({
   ...redisConnectionOptions,
-  maxRetriesPerRequest: 20,
+  maxRetriesPerRequest: null,
 });
 
 sharedRedisConnection.on("connect", () => {
@@ -27,10 +27,10 @@ sharedRedisConnection.on("error", (err) => {
   console.error("[Redis] Shared client error:", err.message);
 });
 
-// For BullMQ Workers and QueueEvents: provide connection options so BullMQ
-// manages dedicated, unblocked connections for each worker and event listener.
-export const sharedWorkerRedisConnection = redisConnectionOptions;
+// For BullMQ Workers and QueueEvents: export the shared Redis client instance
+// so BullMQ reuses it for regular commands and only duplicates for blocking commands.
+export const sharedWorkerRedisConnection = sharedRedisConnection;
 
-export const connection = redisConnectionOptions;
+export const connection = sharedRedisConnection;
 
-export default redisConnectionOptions;
+export default sharedRedisConnection;

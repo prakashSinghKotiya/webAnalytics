@@ -1,5 +1,5 @@
-import { Queue, QueueEvents } from "bullmq";
-import { sharedRedisConnection, sharedWorkerRedisConnection } from "../config/redis.js";
+import { Queue } from "bullmq";
+import { sharedRedisConnection } from "../config/redis.js";
 
 const defaultJobOptions = {
   attempts: 3,
@@ -16,12 +16,7 @@ export const redirectQueue = new Queue("redirect-queue", {
   defaultJobOptions,
 });
 
-// Queue event listener
-export const redirectQueueListener = new QueueEvents("redirect-queue", {
-  connection: sharedWorkerRedisConnection,
-});
-
-export const redirectQueueEvents = redirectQueueListener;
+export const redirectQueueEvents = null;
 
 const attachQueueErrorHandler = (queue, name) => {
   queue.on("error", (err) => {
@@ -30,5 +25,5 @@ const attachQueueErrorHandler = (queue, name) => {
 };
 
 attachQueueErrorHandler(redirectQueue, "redirect-queue");
-attachQueueErrorHandler(redirectQueueListener, "redirect-queue-events");
 
+export default redirectQueue;

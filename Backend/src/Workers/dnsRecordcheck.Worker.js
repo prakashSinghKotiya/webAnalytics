@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { redisConnectionOptions } from "../config/redis.js";
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { checkDnsRecords } from "../Services/dnsRecordtype.Service.js";
 import { DnsRecord } from "../Models/dnsRecord.Model.js";
 
@@ -68,7 +68,7 @@ export const startDnsWorker = () => {
       }
     },
     {
-      connection: redisConnectionOptions,
+      connection: sharedWorkerRedisConnection,
       concurrency: 10,
     }
   );

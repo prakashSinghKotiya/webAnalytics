@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { redisConnectionOptions } from "../config/redis.js";
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { findRedirects } from "../Services/redirectCheck.Service.js";
 import { RedirectCheck } from "../Models/redirectCheck.Model.js";
 
@@ -88,7 +88,7 @@ export const startRedirectWorker = () => {
       }
     },
     {
-      connection: redisConnectionOptions,
+      connection: sharedWorkerRedisConnection,
       concurrency: 10,
     }
   );

@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { redisConnectionOptions } from "../config/redis.js";
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { runPageSpeed } from "../Services/psInsight.Service.js";
 import { Lighthouse } from "../Models/Lighthouse.Model.js";
 
@@ -75,7 +75,7 @@ export const startLighthouseWorker = () => {
       }
     },
     {
-      connection: redisConnectionOptions,
+      connection: sharedWorkerRedisConnection,
       concurrency: 10,
     }
   );

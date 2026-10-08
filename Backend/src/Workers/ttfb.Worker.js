@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { redisConnectionOptions } from "../config/redis.js";
+import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { measureTTFB } from "../Services/ttfb.Service.js";
 import { Ttfb } from "../Models/Ttfb.Model.js";
 
@@ -63,7 +63,7 @@ export const startTtfbWorker = (region) => {
       }
     },
     {
-      connection: redisConnectionOptions,
+      connection: sharedWorkerRedisConnection,
       concurrency: 10,
     }
   );

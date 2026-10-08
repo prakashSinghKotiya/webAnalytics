@@ -1,4 +1,5 @@
-import { redirectQueue, redirectQueueListener } from "../../queue/redirectCheck.Queue.js";
+import { redirectQueue } from "../../queue/redirectCheck.Queue.js";
+import { redirectQueueListener } from "../../queue/redirectCheck.QeventListner.js";
 import { RedirectCheck } from "../../Models/redirectCheck.Model.js";
 
 // Handling BullMQ queue events when Redirect Check jobs complete or fail
@@ -60,27 +61,27 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         }
       }
 
-      if (userRoom) {
-        const payload = {
-          jobId,
-          redirectCheckId: data?.redirectCheckId || jobId,
-          recordId: data?.recordId || jobId,
-          roomId: userRoom,
-          result: data?.result ?? data,
-          status: data?.status || "completed",
-          error: data?.error || null,
-        };
-
-        // Emit to user or guest room
-        io.to(userRoom).emit("redirectCheckCompleted", payload);
-        io.to(userRoom).emit("redirectQueue-completed", payload);
-
-        console.log(`[redirectCheck] Result emitted to room: ${userRoom} for job: ${jobId}`);
-      } else {
-        console.warn(`[redirectCheck] Unable to find destination room for job ${jobId}`);
+      if (!userRoom) {
+        console.warn(`[redirectCheck] No room found for completed job ${jobId}`);
+        return;
       }
+
+      const payload = {
+        jobId,
+        redirectCheckId: data?.redirectCheckId || data?.recordId || jobId,
+        recordId: data?.recordId || data?.redirectCheckId || jobId,
+        roomId: userRoom,
+        result: data?.result,
+        status: data?.status || "completed",
+        error: data?.error || null,
+      };
+
+      io.to(userRoom).emit("redirectCheckCompleted", payload);
+      io.to(userRoom).emit("redirect-completed", payload);
+
+      console.log(`[redirectCheck] Result emitted to room: ${userRoom} for job: ${jobId}`);
     } catch (err) {
-      console.error(`[redirectCheck] Error processing completed event for job ${jobId}:`, err);
+      console.error(`[redirectCheck] Error handling completed event for job ${jobId}:`, err);
     }
   });
 
@@ -89,7 +90,7 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
     console.error(`[redirectCheck] Job ${jobId} failed:`, failedReason);
 
     try {
-      const redirectDoc = await RedirectCheck.findByIdAndUpdate(
+      const doc = await RedirectCheck.findByIdAndUpdate(
         jobId,
         {
           status: "failed",
@@ -99,29 +100,47 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         { new: true }
       ).lean();
 
-      const userRoom =
-        redirectDoc?.roomId ||
-        (redirectDoc?.userId
-          ? `user:${redirectDoc.userId}`
-          : redirectDoc?.guestId
-          ? `guest:${redirectDoc.guestId}`
-          : null);
+      let userRoom =
+        doc?.roomId ||
+        (doc?.userId ? `user:${doc.userId}` : doc?.guestId ? `guest:${doc.guestId}` : null);
 
-      if (userRoom) {
-        io.to(userRoom).emit("redirectCheckFailed", {
-          jobId,
-          roomId: userRoom,
-          result: {
-            status: "failed",
-            error: failedReason || "Redirect check failed",
-          },
-          status: "failed",
-        });
+      if (!userRoom) {
+        try {
+          const job = await redirectQueue.getJob(jobId);
+          if (job?.data?.roomId) {
+            userRoom = job.data.roomId;
+          } else if (job?.data?.userId) {
+            userRoom = `user:${job.data.userId}`;
+          } else if (job?.data?.guestId) {
+            userRoom = `guest:${job.data.guestId}`;
+          }
+        } catch (jobErr) {
+          console.error(`[redirectCheck] Error retrieving job ${jobId} on fail:`, jobErr);
+        }
       }
+
+      if (!userRoom) {
+        console.warn(`[redirectCheck] No room found for failed job ${jobId}`);
+        return;
+      }
+
+      const payload = {
+        jobId,
+        redirectCheckId: jobId,
+        recordId: jobId,
+        roomId: userRoom,
+        status: "failed",
+        error: failedReason || "Redirect check failed",
+      };
+
+      io.to(userRoom).emit("redirectCheckFailed", payload);
+      io.to(userRoom).emit("redirect-failed", payload);
+
+      console.log(`[redirectCheck] Failure emitted to room: ${userRoom} for job: ${jobId}`);
     } catch (err) {
-      console.error(`[redirectCheck] Error processing failed event for job ${jobId}:`, err);
+      console.error(`[redirectCheck] Error handling failed event for job ${jobId}:`, err);
     }
   });
 };
 
-export const redirectQueueEvent = handleRedirectQueueEvent;
+export default redirectQueueResultHandler;

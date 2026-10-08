@@ -1,5 +1,5 @@
-import { Queue, QueueEvents } from "bullmq";
-import { sharedRedisConnection, sharedWorkerRedisConnection } from "../config/redis.js";
+import { Queue } from "bullmq";
+import { sharedRedisConnection } from "../config/redis.js";
 
 const defaultJobOptions = {
   attempts: 3,
@@ -18,13 +18,6 @@ export const dnsRecordCheck = new Queue("dnsRecordCheck-queue", {
 
 export const dnsRecordQueue = dnsRecordCheck;
 
-// Queue event listener
-export const dnsRecordCheckListener = new QueueEvents("dnsRecordCheck-queue", {
-  connection: sharedWorkerRedisConnection,
-});
-
-export const dnsRecordQueueEvents = dnsRecordCheckListener;
-
 const attachQueueErrorHandler = (queue) => {
   queue.on("error", (err) => {
     console.error("[dnsRecordCheck] Queue Error:", err);
@@ -32,3 +25,5 @@ const attachQueueErrorHandler = (queue) => {
 };
 
 attachQueueErrorHandler(dnsRecordCheck);
+
+export default dnsRecordCheck;

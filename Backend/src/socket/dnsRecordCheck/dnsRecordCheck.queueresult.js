@@ -1,4 +1,5 @@
-import { dnsRecordCheck, dnsRecordCheckListener } from "../../queue/dnsRecordCheck.Queue.js";
+import { dnsRecordCheck } from "../../queue/dnsRecordCheck.Queue.js";
+import { dnsRecordCheckListener } from "../../queue/dnsRecordCheck.QeventListner.js";
 import { DnsRecord } from "../../Models/dnsRecord.Model.js";
 
 // Handling BullMQ queue events when DNS record jobs complete or fail
@@ -66,19 +67,21 @@ export const handleDnsQueueEvent = (queueEvent, io) => {
         { new: true }
       ).lean();
 
-      const roomId =
-        dnsDoc?.roomId ||
-        (dnsDoc?.userId ? `user:${dnsDoc.userId}` : dnsDoc?.guestId ? `guest:${dnsDoc.guestId}` : null);
+      let targetRoom = dnsDoc?.roomId;
+      if (!targetRoom && dnsDoc?.userId) {
+        targetRoom = `user:${dnsDoc.userId}`;
+      } else if (!targetRoom && dnsDoc?.guestId) {
+        targetRoom = `guest:${dnsDoc.guestId}`;
+      }
 
-      if (roomId) {
-        io.to(roomId).emit("dnsRecordCheckFailed", {
+      if (targetRoom) {
+        io.to(targetRoom).emit("dnsRecordFailed", {
           jobId,
-          roomId,
-          result: {
-            status: "failed",
-            error: failedReason || "DNS record check failed",
-          },
-          status: "failed",
+          error: failedReason || "DNS record check failed",
+        });
+        io.to(targetRoom).emit("dnsRecordCheck-failed", {
+          jobId,
+          error: failedReason || "DNS record check failed",
         });
       }
     } catch (err) {
@@ -86,3 +89,5 @@ export const handleDnsQueueEvent = (queueEvent, io) => {
     }
   });
 };
+
+export default dnsRecordCheckResultHandler;

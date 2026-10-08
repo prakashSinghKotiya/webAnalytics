@@ -19,7 +19,7 @@ try {
 }
 
 const regions = ["india", "europe", "usa"];
- const workers = [];
+const workers = [];
 
 // 1. TTFB Regional Workers
 regions.forEach((region) => {
@@ -48,7 +48,7 @@ const redirectWorker = startRedirectWorker();
 workers.push(redirectWorker);
 console.log("[Worker] Redirect check worker active");
 
-//6. WHOIS Lookup Worker
+// 6. WHOIS Lookup Worker
 const whoisWorker = startWhoisWorker();
 workers.push(whoisWorker);
 console.log("[Worker] WHOIS lookup worker active");
@@ -66,4 +66,3 @@ const shutdown = async (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
-

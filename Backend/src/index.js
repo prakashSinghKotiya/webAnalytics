@@ -8,9 +8,9 @@ import { setupTtfbQueueResult } from "./socket/ttfb/ttfb.queueresult.js";
 import { UptimeRobotEventHandler } from "./socket/UptimeMonitor/uptime.queueresult.js";
 import { LighthouseResultHandler } from "./socket/Lighthouse/Lighthouse.queueresult.js";
 import { dnsRecordCheckResultHandler } from "./socket/dnsRecordCheck/dnsRecordCheck.queueresult.js";
-import { socketAuthMiddleware } from "./Middleware/Socket.middleware.js";
 import { redirectQueueResultHandler } from "./socket/Redirect/RedirectCheck.queueresult.js";
 import { whoisLookupResultHandler } from "./socket/WhoisLookup/whoisLookup.queueresult.js";
+import { socketAuthMiddleware } from "./Middleware/Socket.middleware.js";
 
 const server = http.createServer(app);
 
