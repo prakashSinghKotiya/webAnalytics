@@ -5,6 +5,17 @@ const whoisLookupSchema = new Schema(
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
+      required: false,
+      index: true,
+    },
+
+    guestId: {
+      type: String,
+      index: true,
+    },
+
+    roomId: {
+      type: String,
       required: true,
       index: true,
     },
@@ -51,6 +62,11 @@ const whoisLookupSchema = new Schema(
 
 whoisLookupSchema.index({
   userId: 1,
+  createdAt: -1,
+});
+
+whoisLookupSchema.index({
+  guestId: 1,
   createdAt: -1,
 });
 

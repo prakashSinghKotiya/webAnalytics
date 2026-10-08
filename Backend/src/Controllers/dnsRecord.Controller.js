@@ -1,45 +1,51 @@
 import { DnsRecord } from "../Models/dnsRecord.Model.js";
 import { dnsRecordCheck } from "../queue/dnsRecordCheck.Queue.js";
 import { normalizeHostname, DnsServiceError } from "../Services/dnsRecordtype.Service.js";
+import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
 
 export const dnsRecordLookup = async (req, res) => {
-  let record = null
+  let record = null;
   try {
-    const { url } = req.body;
+    const rawUrl = req.body?.url;
 
-    if (!url || typeof url !== "string" || !url.trim()) {
+    if (!rawUrl || typeof rawUrl !== "string" || !rawUrl.trim()) {
       return res.status(400).json({
         success: false,
         error: "Missing or invalid 'url' in request body",
       });
     }
 
-    let hostname;
-    try {
-      hostname = normalizeHostname(url);
-    } catch (err) {
-      const status = err instanceof DnsServiceError ? err.statusCode : 400;
-      return res.status(status).json({ success: false, error: err.message });
+    let hostname = req.targetHostname;
+    if (!hostname) {
+      try {
+        hostname = normalizeHostname(rawUrl);
+      } catch (err) {
+        const status = err instanceof DnsServiceError ? err.statusCode : 400;
+        return res.status(status).json({ success: false, error: err.message });
+      }
     }
 
-    const userId = req.user._id.toString();
-    const roomId = `user:${userId}`;
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
-    // 1. Create DB record first with status 'queued'
-     record = await DnsRecord.create({
-      userId,
+    // 1. Create DB record with status 'queued'
+    record = await DnsRecord.create({
+      ...(userId ? { userId } : { guestId }),
+      roomId,
       url: hostname,
       status: "queued",
     });
 
     const dnsRecordId = record._id.toString();
 
-    // 2. Using  MongoDB document ID as BullMQ job ID
+    // 2. Add job to queue
     const job = await dnsRecordCheck.add(
       "check-dns-records",
       {
         targetUrl: hostname,
         userId,
+        guestId,
         dnsRecordId,
         roomId,
       },
@@ -54,10 +60,15 @@ export const dnsRecordLookup = async (req, res) => {
       jobId: job.id,
       dnsRecordId,
       roomId,
+      guest: !userId,
+      remaining: req.guestDemoRemaining,
+      totalLimit: req.guestDemoTotalLimit,
       data: record,
     });
   } catch (err) {
     console.error("[dnsRecordLookup] error:", err);
+
+    await releaseGuestDemoReservation(req);
 
     // Rollback created document if queue addition failed
     if (record?._id) {

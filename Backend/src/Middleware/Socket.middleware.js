@@ -1,55 +1,47 @@
-
-import * as cookie from "cookie"; 
-import cookieParser from "cookie-parser"; // Needed to unsign the cookie
+import * as cookie from "cookie";
+import cookieParser from "cookie-parser";
 import Session from "../Models/Session.Model.js";
+import { guestCookieName } from "./guestDemo.Mw.js";
 
-
-
-
-export const socketAuthMiddleware = async (socket , next ) => {
+export const socketAuthMiddleware = async (socket, next) => {
   try {
-    
     const cookieHeader = socket.handshake.headers.cookie;
-  //  console.log("Socket Handshake Cookies:", socket.handshake.headers.cookie);
+    if (!cookieHeader) return next(new Error("Authentication required. No cookies found."));
 
-    if (!cookieHeader) {
-      return next(new Error("Authentication required. No cookies found."));
-    }
-
-   
     const cookies = cookie.parseCookie(cookieHeader);
-    // console.log("Parsed Cookies:", cookies);
-     console.log("Parsed Cookies:", cookies.token , cookies.sid);
-    let rawToken = cookies.sid;
+    const rawToken = cookies.sid;
 
-    if (!rawToken) {
-      return next(new Error("Authentication token is missing"));
+    // 1. Authenticated user takes priority: joins ONLY their user room
+    if (rawToken) {
+      const sessionId = cookieParser.signedCookie(rawToken, process.env.COOKIE_SECRET);
+      if (sessionId && sessionId !== rawToken) {
+        const session = await Session.findById(sessionId).lean();
+        if (session) {
+          const userRoom = `user:${session.userId}`;
+          socket.data.userId = session.userId.toString();
+          socket.data.roomId = userRoom;
+          socket.data.roomIds = [userRoom];
+          delete socket.data.guestId;
+          return next();
+        }
+      }
     }
 
-
-    const token = cookieParser.signedCookie(rawToken, process.env.COOKIE_SECRET);
-    console.log("Signed Token:", token);
-
-
-    if (!token || token === rawToken) {
-       return next(new Error("Invalid cookie signature"));
+    // 2. Guest demo fallback: ONLY active if the user is unauthenticated
+    const rawGuestCookie = cookies[guestCookieName];
+    const guestId = rawGuestCookie && cookieParser.signedCookie(rawGuestCookie, process.env.COOKIE_SECRET);
+    if (typeof guestId === "string" && guestId !== rawGuestCookie && /^[a-f0-9]{32}$/i.test(guestId)) {
+      const guestRoom = `guest:${guestId}`;
+      socket.data.guestId = guestId;
+      socket.data.roomId = guestRoom;
+      socket.data.roomIds = [guestRoom];
+      delete socket.data.userId;
+      return next();
     }
 
-    const user = await Session.findById(token)
-        if (!user) {
-      return next(
-        new Error("Session expired or invalid")
-      );
-    }
-
-
-
-      socket.data.userId = user.userId.toString();
-
-    next();
-    
+    return next(new Error("Authentication required. Initialize a guest demo session first."));
   } catch (error) {
-    console.log("Socket authentication error:", error);
-    next(new Error("Invalid authentication token" ));
+    console.error("Socket authentication error:", error);
+    next(new Error("Invalid authentication token"));
   }
 };

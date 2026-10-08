@@ -26,29 +26,35 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
       }
 
       let userId = data?.userId;
-      let userRoom = data?.roomId;
+      let guestId = data?.guestId;
+      let userRoom =
+        data?.roomId ||
+        (userId ? `user:${userId}` : guestId ? `guest:${guestId}` : null);
 
-      // Because jobId === dbId, fallback to DB document to retrieve userId/room if needed
+      // Because jobId === dbId, fallback to DB document to retrieve userId/guestId/room if needed
       if (!userRoom && jobId) {
         const doc = await WhoisLookup.findById(jobId).lean();
-        if (doc?.userId) {
+        if (doc?.roomId) {
+          userRoom = doc.roomId;
+        } else if (doc?.userId) {
           userId = doc.userId.toString();
           userRoom = `user:${userId}`;
+        } else if (doc?.guestId) {
+          guestId = doc.guestId;
+          userRoom = `guest:${guestId}`;
         }
-      }
-
-      if (!userRoom && userId) {
-        userRoom = `user:${userId}`;
       }
 
       // Final fallback to Redis job
       if (!userRoom) {
         try {
           const job = await whoisLookup.getJob(jobId);
-          if (job?.data?.userId) {
-            userRoom = `user:${job.data.userId}`;
-          } else if (job?.data?.roomId) {
+          if (job?.data?.roomId) {
             userRoom = job.data.roomId;
+          } else if (job?.data?.userId) {
+            userRoom = `user:${job.data.userId}`;
+          } else if (job?.data?.guestId) {
+            userRoom = `guest:${job.data.guestId}`;
           }
         } catch (jobErr) {
           console.error(`[whoisLookup] Error retrieving job ${jobId} on complete:`, jobErr);
@@ -66,7 +72,7 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
           error: data?.error || null,
         };
 
-        // Emit to user room (supporting both naming conventions for compatibility)
+        // Emit to room (supporting both naming conventions for compatibility)
         io.to(userRoom).emit("whoisLookupCompleted", payload);
         io.to(userRoom).emit("whoisLookup-completed", payload);
 
@@ -80,38 +86,46 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
   });
 
   // Failed job event - uses MongoDB primary key (jobId === whoisDbId) without Redis roundtrip
-    queueEvent.on("failed", async ({ jobId, failedReason }) => {
-      console.error(`[WHOIS ${region}] Job ${jobId} failed:`, failedReason);
-  
-      try {
-        const whoisDoc = await WhoisLookup.findByIdAndUpdate(
+  queueEvent.on("failed", async ({ jobId, failedReason }) => {
+    console.error(`[whoisLookup] Job ${jobId} failed:`, failedReason);
+
+    try {
+      const whoisDoc = await WhoisLookup.findByIdAndUpdate(
+        jobId,
+        {
+          status: "failed",
+          error: failedReason || "WHOIS lookup failed",
+          completedAt: new Date(),
+        },
+        { new: true }
+      ).lean();
+
+      const targetRoom =
+        whoisDoc?.roomId ||
+        (whoisDoc?.userId
+          ? `user:${whoisDoc.userId}`
+          : whoisDoc?.guestId
+          ? `guest:${whoisDoc.guestId}`
+          : null);
+
+      if (targetRoom) {
+        const failPayload = {
           jobId,
-          {
+          roomId: targetRoom,
+          result: {
             status: "failed",
             error: failedReason || "WHOIS lookup failed",
-            completedAt: new Date(),
           },
-          { new: true }
-        ).lean();
-  
-        if (whoisDoc?.userId) {
-          const userRoom = `user:${whoisDoc.userId}`;
-          io.to(userRoom).emit("whoisLookupFailed", {
-            jobId,
-            roomId: userRoom,
-            region: whoisDoc.region || region,
-            result: {
-              region: whoisDoc.region || region,
-              status: "failed",
-              error: failedReason || "WHOIS lookup failed",
-            },
-            status: "failed",
-          });
-        }
-      } catch (err) {
-        console.error(`[WHOIS ${region}] Error processing failed event for job ${jobId}:`, err);
+          status: "failed",
+        };
+
+        io.to(targetRoom).emit("whoisLookupFailed", failPayload);
+        io.to(targetRoom).emit("whoisLookup-failed", failPayload);
       }
-    });
+    } catch (err) {
+      console.error(`[whoisLookup] Error processing failed event for job ${jobId}:`, err);
+    }
+  });
 };
 
 export const whoisLookupEvent = handleWhoisQueueEvent;

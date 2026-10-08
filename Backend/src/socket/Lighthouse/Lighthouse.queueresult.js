@@ -26,26 +26,24 @@ export const handleQueueEvent = (queueEvent, io) => {
         return;
       }
 
-      const userId = data.userId;
-      if (!userId) {
-        console.warn(`[Lighthouse] No userId present in job ${jobId} returnvalue`);
+      const roomId = data.roomId;
+      if (!roomId) {
+        console.warn(`[Lighthouse] No roomId present in job ${jobId} returnvalue`);
         return;
       }
-
-      const userRoom = `user:${userId}`;
       const payload = {
         jobId,
         lighthousedbId: data.lighthousedbId || jobId,
-        roomId: userRoom,
+        roomId,
         result: data.result,
         status: data.status || "completed",
       };
 
       // Emit to user room (supporting both naming conventions for compatibility)
-      io.to(userRoom).emit("lighthouseCompleted", payload);
-      io.to(userRoom).emit("Lighthouse-completed", payload);
+      io.to(roomId).emit("lighthouseCompleted", payload);
+      io.to(roomId).emit("Lighthouse-completed", payload);
 
-      console.log(`[Lighthouse] Result emitted to room: ${userRoom} for job: ${jobId}`);
+      console.log(`[Lighthouse] Result emitted to room: ${roomId} for job: ${jobId}`);
     } catch (err) {
       console.error(`[Lighthouse] Error processing completed event for job ${jobId}:`, err);
     }
@@ -71,16 +69,13 @@ export const handleQueueEvent = (queueEvent, io) => {
         ).lean();
       }
 
-      let userId = lighthouseDoc?.userId?.toString();
-      let userRoom = userId ? `user:${userId}` : null;
+      let userRoom = lighthouseDoc?.roomId || null;
 
       // Fallback: If DB doc wasn't found or userId missing, check Redis job data
       if (!userRoom) {
         try {
           const job = await Lighthouequeue.getJob(jobId);
-          if (job?.data?.userId) {
-            userRoom = `user:${job.data.userId}`;
-          } else if (job?.data?.roomId) {
+          if (job?.data?.roomId) {
             userRoom = job.data.roomId;
           }
         } catch (jobErr) {

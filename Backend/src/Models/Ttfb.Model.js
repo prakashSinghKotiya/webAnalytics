@@ -6,6 +6,17 @@ const ttfbSchema = new Schema(
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
+      required: false,
+      index: true,
+    },
+
+    guestId: {
+      type: String,
+      index: true,
+    },
+
+    roomId: {
+      type: String,
       required: true,
       index: true,
     },
@@ -66,5 +77,6 @@ ttfbSchema.index({
   userId: 1,
   createdAt: -1,
 });
+ttfbSchema.index({ guestId: 1, createdAt: -1 });
 
 export const Ttfb = model("Ttfb", ttfbSchema);

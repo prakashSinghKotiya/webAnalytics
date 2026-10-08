@@ -1,5 +1,6 @@
 import { RedirectCheck } from "../Models/redirectCheck.Model.js";
 import { redirectQueue } from "../queue/redirectCheck.Queue.js";
+import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
 
 export const redirectCheckController = async (req, res) => {
   let record = null;
@@ -13,45 +14,51 @@ export const redirectCheckController = async (req, res) => {
       });
     }
 
-    let targetUrl = url.trim();
-    if (!/^https?:\/\//i.test(targetUrl)) {
-      targetUrl = `http://${targetUrl}`;
-    }
+    let targetUrl = req.targetUrl;
+    if (!targetUrl) {
+      targetUrl = url.trim();
+      if (!/^https?:\/\//i.test(targetUrl)) {
+        targetUrl = `http://${targetUrl}`;
+      }
 
-    try {
-      const parsed = new URL(targetUrl);
-      if (!["http:", "https:"].includes(parsed.protocol)) {
+      try {
+        const parsed = new URL(targetUrl);
+        if (!["http:", "https:"].includes(parsed.protocol)) {
+          return res.status(400).json({
+            success: false,
+            error: "URL must start with http:// or https://",
+          });
+        }
+        targetUrl = parsed.toString();
+      } catch {
         return res.status(400).json({
           success: false,
-          error: "URL must start with http:// or https://",
+          error: "Invalid URL format. Include http:// or https://",
         });
       }
-      targetUrl = parsed.toString();
-    } catch {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid URL format. Include http:// or https://",
-      });
     }
 
-    const userId = req.user._id.toString();
-    const roomId = `user:${userId}`;
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
-    // 1. Create DB record first with status 'queued'
+    // 1. Create DB record with status 'queued'
     record = await RedirectCheck.create({
-      userId,
+      ...(userId ? { userId } : { guestId }),
+      roomId,
       url: targetUrl,
       status: "queued",
     });
 
     const redirectCheckId = record._id.toString();
 
-    // 2. Add job inside queue with db data inside job and set job id as db id
+    // 2. Add job inside queue
     const job = await redirectQueue.add(
       "redirect-queue",
       {
         targetUrl,
         userId,
+        guestId,
         redirectCheckId,
         recordId: redirectCheckId,
         roomId,
@@ -64,6 +71,7 @@ export const redirectCheckController = async (req, res) => {
 
     if (!job) {
       await RedirectCheck.findByIdAndDelete(record._id);
+      await releaseGuestDemoReservation(req);
       return res.status(500).json({
         success: false,
         error: "Failed to queue redirect check",
@@ -76,10 +84,15 @@ export const redirectCheckController = async (req, res) => {
       jobId: job.id,
       redirectCheckId,
       roomId,
+      guest: !userId,
+      remaining: req.guestDemoRemaining,
+      totalLimit: req.guestDemoTotalLimit,
       data: record,
     });
   } catch (err) {
     console.error("[redirectCheckController] error:", err);
+
+    await releaseGuestDemoReservation(req);
 
     if (record?._id) {
       await RedirectCheck.findByIdAndDelete(record._id).catch(() => {});

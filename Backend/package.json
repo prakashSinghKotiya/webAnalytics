@@ -5,8 +5,10 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node  --env-file=.env src/index.js",
-    "worker": "node --watch --no-deprecation --env-file=.env src/Workers/ttfbStart.Worker.js"
+    "dev": "node --env-file=.env src/index.js",
+    "worker": "node --watch --no-deprecation --env-file=.env src/Workers/worker.js",
+    "worker:all": "node --watch --no-deprecation --env-file=.env src/Workers/worker.js",
+    "worker:ttfb": "node --watch --no-deprecation --env-file=.env src/Workers/ttfbStart.worker.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

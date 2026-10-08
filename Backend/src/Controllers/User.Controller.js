@@ -8,6 +8,7 @@ import User from "../Models/User.Model.js"
 import Session from "../Models/Session.Model.js"
 import { loginSchema, registerSchema } from "../Validators/ZodSchema.js"
 import z from "zod"
+import { guestCookieName } from "../Middleware/guestDemo.Mw.js"
 
 
 
@@ -114,13 +115,50 @@ export const loginUser = async(req, res, next)=>{
      const sessionExpiryTime = 60 * 1000 * 60 * 24 * 7;
      
 
-    res.cookie("sid", session._id.toString() ,{ 
+    const isProduction = process.env.NODE_ENV === "production";
+    res.cookie("sid", session._id.toString(), {
         httpOnly: true,
         signed: true,
         maxAge: sessionExpiryTime,
-        sameSite: "none",   
-        secure: true
-    })
+        sameSite: isProduction ? "none" : "lax",
+        secure: isProduction,
+    });
+
+    // Clear guest cookie on login so the client is no longer in guest mode
+    res.clearCookie(guestCookieName, {
+        httpOnly: true,
+        signed: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    });
+
+    // If an existing socket was connected under this guest cookie, migrate it to the user room
+    const guestId = req.signedCookies?.[guestCookieName];
+    if (guestId) {
+      const io = req.app.get("io");
+      if (io) {
+        const guestRoom = `guest:${guestId}`;
+        const userRoom = `user:${user._id}`;
+        try {
+          const sockets = await io.in(guestRoom).fetchSockets();
+          for (const s of sockets) {
+            s.leave(guestRoom);
+            s.join(userRoom);
+            s.data.userId = user._id.toString();
+            s.data.roomId = userRoom;
+            s.data.roomIds = [userRoom];
+            delete s.data.guestId;
+            s.emit("roomMigrated", { roomId: userRoom });
+          }
+          if (sockets.length > 0) {
+            console.log(`[Socket] Migrated ${sockets.length} socket(s) from ${guestRoom} to ${userRoom}`);
+          }
+        } catch (socketErr) {
+          console.error("[Socket] Error migrating guest sockets on login:", socketErr);
+        }
+      }
+    }
+
     res.json({ message: "logged in" });
 }
     catch(err){
@@ -138,11 +176,12 @@ export const userDetails = async(req, res)=>{
 
     
     res.status(200).json({
-        name : user.name, 
+        id: user._id,
+        name: user.name, 
         email: user.email,
         picture: user.picture,
-        plan : user.plans
-        
+        plan: user.plans || "free",
+        role: user.role || "User",
     })
 
 
@@ -235,11 +274,32 @@ export const DeleteUser = async(req,res,next)=>{ //rbac
     }}    
 
 
-export const logout = async (req, res)=>{
-    const{sid} = req.signedCookies
-    await Session.findByIdAndDelete(sid)  
+export const logout = async (req, res) => {
+    const { sid } = req.signedCookies;
+    const session = sid ? await Session.findByIdAndDelete(sid) : null;
 
-    res.clearCookie("sid") // this will clear the coookie ie the user id we have set and user will be logout
+    const io = req.app.get("io");
+    if (session?.userId && io) {
+      try {
+        io.in(`user:${session.userId}`).disconnectSockets(true);
+      } catch (err) {
+        console.error("[Socket] Error disconnecting user sockets on logout:", err);
+      }
+    }
+
+    const isProd = process.env.NODE_ENV === "production";
+    res.clearCookie("sid", {
+        httpOnly: true,
+        signed: true,
+        sameSite: isProd ? "none" : "lax",
+        secure: isProd,
+    });
+    res.clearCookie(guestCookieName, {
+        httpOnly: true,
+        signed: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    });
     res.status(204).end();
-}
+};
 

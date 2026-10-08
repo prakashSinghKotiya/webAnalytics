@@ -25,17 +25,15 @@ export const handleQueueEvent = (queueEvent, region, io) => {
         return;
       }
 
-      const userId = data.userId;
-      if (!userId) {
-        console.warn(`[TTFB ${region}] No userId present in job ${jobId} returnvalue`);
+      const roomId = data.roomId;
+      if (!roomId) {
+        console.warn(`[TTFB ${region}] No roomId present in job ${jobId} returnvalue`);
         return;
       }
 
-      const userRoom = `user:${userId}`;
-
-      io.to(userRoom).emit("ttfbCompleted", {
+      io.to(roomId).emit("ttfbCompleted", {
         jobId,
-        roomId: userRoom,
+        roomId,
         region: data.region || region,
         result: data.result,
         status: data.status || "completed",
@@ -60,11 +58,10 @@ export const handleQueueEvent = (queueEvent, region, io) => {
         { new: true }
       ).lean();
 
-      if (ttfbDoc?.userId) {
-        const userRoom = `user:${ttfbDoc.userId}`;
-        io.to(userRoom).emit("ttfbCompleted", {
+      if (ttfbDoc?.roomId) {
+        io.to(ttfbDoc.roomId).emit("ttfbCompleted", {
           jobId,
-          roomId: userRoom,
+          roomId: ttfbDoc.roomId,
           region: ttfbDoc.region || region,
           result: {
             region: ttfbDoc.region || region,

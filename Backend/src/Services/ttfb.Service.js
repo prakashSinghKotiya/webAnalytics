@@ -1,3 +1,5 @@
+import { normalizePublicHttpUrl } from "./publicUrl.Service.js";
+
 export async function measureTTFB(targetUrl, timeoutMs = 20000) {
   try {
     let normalized = String(targetUrl || "").trim();
@@ -5,16 +7,20 @@ export async function measureTTFB(targetUrl, timeoutMs = 20000) {
       normalized = `https://${normalized}`;
     }
 
-    const url = new URL(normalized);
+    // Queue payloads are normally created by the validated HTTP endpoint.
+    // Re-check here because this worker performs the outbound network request.
+    normalized = normalizePublicHttpUrl(normalized);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     const start = performance.now();
 
-    const response = await fetch(url.toString(), {
+    const response = await fetch(normalized, {
       method: "GET",
-      redirect: "follow",
+      // Following an unvalidated redirect could turn a public URL into an SSRF
+      // request. TTFB is still measured accurately for the initial response.
+      redirect: "manual",
       signal: controller.signal,
       headers: {
         "User-Agent":

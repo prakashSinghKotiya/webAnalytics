@@ -1,17 +1,13 @@
 import { Lighthouse } from "../Models/Lighthouse.Model.js";
 import { Lighthouequeue } from "../queue/Lighthouse.queue.js";
+import { normalizePublicHttpUrl } from "../Services/publicUrl.Service.js";
+import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
 
 
 export const LighthouseResult = async (req, res) => {
   try {
-    const { url, strategy = "mobile" } = req.body;
-
-    if (!url) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing 'url' in request body",
-      });
-    }
+    const { strategy: requestedStrategy = "mobile" } = req.body;
+    const strategy = req.lighthouseStrategy || requestedStrategy;
 
     const validStrategies = ["mobile", "desktop", "both"];
     if (strategy && !validStrategies.includes(strategy)) {
@@ -21,26 +17,24 @@ export const LighthouseResult = async (req, res) => {
       });
     }
 
-    let targetUrl = url.trim();
+    let targetUrl;
     try {
-      const parsed = new URL(/^https?:\/\//i.test(targetUrl) ? targetUrl : `https://${targetUrl}`);
-      if (!["http:", "https:"].includes(parsed.protocol)) {
-        throw new Error("Invalid protocol");
-      }
-      targetUrl = parsed.toString();
-    } catch {
+      targetUrl = req.targetUrl || normalizePublicHttpUrl(req.body.url);
+    } catch (error) {
       return res.status(400).json({
         success: false,
-        error: "Invalid URL format. Please provide a valid HTTP or HTTPS URL.",
+        error: error.message,
       });
     }
 
-    const userId = req.user._id.toString();
-    const roomId = `user:${userId}`;
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
     // 1. Create DB record first with status 'queued'
     const lighthouseDb = await Lighthouse.create({
-      userId,
+      ...(userId ? { userId } : { guestId }),
+      roomId,
       url: targetUrl,
       strategy,
       status: "queued",
@@ -54,6 +48,7 @@ export const LighthouseResult = async (req, res) => {
       {
         targetUrl,
         userId,
+        guestId,
         lighthousedbId,
         strategy,
         roomId,
@@ -70,9 +65,13 @@ export const LighthouseResult = async (req, res) => {
       lighthousedbId,
       roomId,
       data: lighthouseDb,
+      guest: !userId,
+      remaining: userId ? undefined : req.guestDemoRemaining,
+      totalLimit: userId ? undefined : req.guestDemoTotalLimit,
     });
   } catch (error) {
     console.error("LighthouseResult error:", error);
+    await releaseGuestDemoReservation(req);
     return res.status(500).json({
       success: false,
       message: "Failed to create Lighthouse job",

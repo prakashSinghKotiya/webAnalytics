@@ -5,6 +5,17 @@ const redirectSchema = new Schema(
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
+      required: false,
+      index: true,
+    },
+
+    guestId: {
+      type: String,
+      index: true,
+    },
+
+    roomId: {
+      type: String,
       required: true,
       index: true,
     },
@@ -51,6 +62,11 @@ const redirectSchema = new Schema(
 
 redirectSchema.index({
   userId: 1,
+  createdAt: -1,
+});
+
+redirectSchema.index({
+  guestId: 1,
   createdAt: -1,
 });
 

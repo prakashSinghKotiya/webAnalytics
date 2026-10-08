@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { sharedWorkerRedisConnection } from "../config/redis.js";
+import { redisConnectionOptions } from "../config/redis.js";
 import { measureTTFB } from "../Services/ttfb.Service.js";
 import { Ttfb } from "../Models/Ttfb.Model.js";
 
@@ -11,12 +11,12 @@ export const startTtfbWorker = (region) => {
     async (job) => {
       console.log(`Processing TTFB job ${job.id} for region: ${region}`);
 
-      const { targetUrl, userId, ttfbdbId, region: jobRegion } = job.data;
+      const { targetUrl, userId, guestId, roomId, ttfbdbId, region: jobRegion } = job.data;
       const targetRegion = jobRegion || region;
 
-      if (!targetUrl || !ttfbdbId || !userId) {
+      if (!targetUrl || !ttfbdbId || (!userId && !guestId) || !roomId) {
         throw new Error(
-          `Invalid job data. TargetUrl: ${targetUrl}, ttfbdbId: ${ttfbdbId}, userId: ${userId}`
+          `Invalid job data. TargetUrl: ${targetUrl}, ttfbdbId: ${ttfbdbId}, actor: ${userId || guestId}`
         );
       }
 
@@ -37,6 +37,8 @@ export const startTtfbWorker = (region) => {
         return {
           jobId: job.id,
           userId,
+          guestId,
+          roomId,
           ttfbdbId,
           region: targetRegion,
           result,
@@ -61,7 +63,7 @@ export const startTtfbWorker = (region) => {
       }
     },
     {
-      connection: sharedWorkerRedisConnection,
+      connection: redisConnectionOptions,
       concurrency: 10,
     }
   );
@@ -80,3 +82,5 @@ export const startTtfbWorker = (region) => {
 
   return worker;
 };
+
+export default startTtfbWorker;

@@ -1,4 +1,3 @@
-
 import { redirectQueue, redirectQueueListener } from "../../queue/redirectCheck.Queue.js";
 import { RedirectCheck } from "../../Models/redirectCheck.Model.js";
 
@@ -10,7 +9,7 @@ export const redirectQueueResultHandler = (io) => {
 export const setupRedirectQueueResult = redirectQueueResultHandler;
 
 export const handleRedirectQueueEvent = (queueEvent, io) => {
-  // Connection 
+  // Connection error handling
   queueEvent.on("error", (err) => {
     console.error("[redirectCheck] QueueEvents error:", err);
   });
@@ -25,30 +24,36 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         console.warn(`[redirectCheck] No returnvalue data found for job ${jobId}`);
       }
 
-      let userId = data?.userId;
-      let userRoom = data?.roomId;
+      let userRoom =
+        data?.roomId ||
+        (data?.userId
+          ? `user:${data.userId}`
+          : data?.guestId
+          ? `guest:${data.guestId}`
+          : null);
 
-      // Because jobId === dbId, fallback to DB document to retrieve userId/room if needed
+      // Fallback to DB document if room not in payload
       if (!userRoom && jobId) {
         const doc = await RedirectCheck.findById(jobId).lean();
-        if (doc?.userId) {
-          userId = doc.userId.toString();
-          userRoom = `user:${userId}`;
-        }
-      }
-
-      if (!userRoom && userId) {
-        userRoom = `user:${userId}`;
+        userRoom =
+          doc?.roomId ||
+          (doc?.userId
+            ? `user:${doc.userId}`
+            : doc?.guestId
+            ? `guest:${doc.guestId}`
+            : null);
       }
 
       // Final fallback to Redis job
       if (!userRoom) {
         try {
           const job = await redirectQueue.getJob(jobId);
-          if (job?.data?.userId) {
-            userRoom = `user:${job.data.userId}`;
-          } else if (job?.data?.roomId) {
+          if (job?.data?.roomId) {
             userRoom = job.data.roomId;
+          } else if (job?.data?.userId) {
+            userRoom = `user:${job.data.userId}`;
+          } else if (job?.data?.guestId) {
+            userRoom = `guest:${job.data.guestId}`;
           }
         } catch (jobErr) {
           console.error(`[redirectCheck] Error retrieving job ${jobId} on complete:`, jobErr);
@@ -66,7 +71,7 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
           error: data?.error || null,
         };
 
-        // Emit to user room (supporting both naming conventions for compatibility)
+        // Emit to user or guest room
         io.to(userRoom).emit("redirectCheckCompleted", payload);
         io.to(userRoom).emit("redirectQueue-completed", payload);
 
@@ -79,9 +84,9 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
     }
   });
 
-  // Failed job event 
+  // Failed job event
   queueEvent.on("failed", async ({ jobId, failedReason }) => {
-    console.error(`[RedirectCheck ${region}] Job ${jobId} failed:`, failedReason);
+    console.error(`[redirectCheck] Job ${jobId} failed:`, failedReason);
 
     try {
       const redirectDoc = await RedirectCheck.findByIdAndUpdate(
@@ -94,14 +99,19 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         { new: true }
       ).lean();
 
-      if (redirectDoc?.userId) {
-        const userRoom = `user:${redirectDoc.userId}`;
+      const userRoom =
+        redirectDoc?.roomId ||
+        (redirectDoc?.userId
+          ? `user:${redirectDoc.userId}`
+          : redirectDoc?.guestId
+          ? `guest:${redirectDoc.guestId}`
+          : null);
+
+      if (userRoom) {
         io.to(userRoom).emit("redirectCheckFailed", {
           jobId,
           roomId: userRoom,
-          region: redirectDoc.region || region,
           result: {
-            region: redirectDoc.region || region,
             status: "failed",
             error: failedReason || "Redirect check failed",
           },
@@ -109,10 +119,9 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         });
       }
     } catch (err) {
-      console.error(`[RedirectCheck ${region}] Error processing failed event for job ${jobId}:`, err);
+      console.error(`[redirectCheck] Error processing failed event for job ${jobId}:`, err);
     }
   });
 };
 
 export const redirectQueueEvent = handleRedirectQueueEvent;
-

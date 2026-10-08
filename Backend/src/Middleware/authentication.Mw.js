@@ -15,8 +15,8 @@ if(!session){
     return res.status(401).json({error: "not logged "})
 }
 
-const user = await User.findById({_id: session.userId}).lean()
-if(!user){
+const user = await User.findById(session.userId).lean()
+if(!user || user.deleted){
    return res.status(401).json({error: "user not found"})}
 req.user = user 
 

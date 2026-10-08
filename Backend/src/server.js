@@ -10,12 +10,13 @@ import  AuthRoutes from "./Routes/Auth.Routes.js"
 import  AdminRoutes from "./Routes/Admin.Routes.js"
 import checkAuth from './Middleware/authentication.Mw.js';
 import cookieParser from 'cookie-parser';
-import { checkDnsRecords } from './Services/dnsRecordtype.Service.js';
-import { findRedirects } from './Services/redirectCheck.Service.js';
-import { runPageSpeed } from './Services/psInsight.Service.js';
+// import { checkDnsRecords } from './Services/dnsRecordtype.Service.js';
+// import { findRedirects } from './Services/redirectCheck.Service.js';
+// import { runPageSpeed } from './Services/psInsight.Service.js';
 import DnsRecordRoutes from './Routes/dnsRecord.Routes.js';
 import RedirectCheckRoutes from './Routes/redirectCheck.Routes.js';
 import WhoisLookupRoutes from './Routes/whoisLookup.Routes.js';
+import { initializeGuestDemo } from './Middleware/guestDemo.Mw.js';
 
 
 
@@ -45,13 +46,18 @@ app.use("/user", UserRoutes)
 app.use("/auth", AuthRoutes)
 app.use("/admin", AdminRoutes)
 
-app.use('/ttfb',checkAuth, ttfbRoute);
-app.use('/uptime',checkAuth, uptimeRobotRoute);
-app.use('/lighthouse',checkAuth, LighthouseRoute);
+// This establishes the signed guest cookie before the browser opens Socket.IO.
+app.post('/demo/session', initializeGuestDemo);
 
-app.use('/dns', checkAuth, DnsRecordRoutes);
-app.use('/redirect', checkAuth, RedirectCheckRoutes);
-app.use('/whois', checkAuth, WhoisLookupRoutes);
+// The routers protect history and account-only endpoints themselves. Their two
+// demo creation endpoints accept either an authenticated user or a guest.
+app.use('/ttfb', ttfbRoute);
+app.use('/uptime',checkAuth, uptimeRobotRoute);
+app.use('/lighthouse', LighthouseRoute);
+
+app.use('/dns', DnsRecordRoutes);
+app.use('/redirect', RedirectCheckRoutes);
+app.use('/whois', WhoisLookupRoutes);
 
 
 

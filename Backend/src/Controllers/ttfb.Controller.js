@@ -1,5 +1,7 @@
 import { Ttfb } from "../Models/Ttfb.Model.js";
 import { europeTtfbQueue, indiaTtfbQueue, usaTtfbQueue } from "../queue/ttfb.queue.js";
+import { normalizePublicHttpUrl } from "../Services/publicUrl.Service.js";
+import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
 
 const queue = {
   india: indiaTtfbQueue,
@@ -9,14 +11,9 @@ const queue = {
 
 export const ttfbFinder = async (req, res) => {
   try {
-    const { url, region } = req.body;
+    const { region } = req.body;
 
-    if (!url) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing 'url' in request body",
-      });
-    }
+    const url = req.targetUrl || normalizePublicHttpUrl(req.body.url);
 
     const workerQueue = queue[region];
     if (!workerQueue) {
@@ -26,12 +23,14 @@ export const ttfbFinder = async (req, res) => {
       });
     }
 
-    const userId = req.user._id.toString();
-    const roomId = `user:${userId}`;
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
     // Create DB record first with status 'queued'
     const ttfbDb = await Ttfb.create({
-      userId,
+      ...(userId ? { userId } : { guestId }),
+      roomId,
       url,
       region,
       status: "queued",
@@ -45,8 +44,10 @@ export const ttfbFinder = async (req, res) => {
       {
         targetUrl: url,
         userId,
+        guestId,
         ttfbdbId,
         region,
+        roomId,
       },
       {
         jobId: ttfbdbId,
@@ -60,9 +61,13 @@ export const ttfbFinder = async (req, res) => {
       ttfbdbId,
       region,
       roomId,
+      guest: !userId,
+      remaining: userId ? undefined : req.guestDemoRemaining,
+      totalLimit: userId ? undefined : req.guestDemoTotalLimit,
     });
   } catch (error) {
     console.error("ttfbFinder error:", error);
+    await releaseGuestDemoReservation(req);
     return res.status(500).json({
       success: false,
       message: "Failed to create TTFB job",
@@ -72,10 +77,10 @@ export const ttfbFinder = async (req, res) => {
 
 export const allRegionttfbFinder = async (req, res) => {
   try {
-    const { url, region } = req.body;
+    const { region } = req.body;
 
     // Basic validation
-    if (!url) {
+    if (!req.body.url) {
       return res.status(400).json({
         success: false,
         error: "Missing 'url' in request body",
@@ -89,14 +94,17 @@ export const allRegionttfbFinder = async (req, res) => {
       });
     }
 
-    const userId = req.user._id.toString();
-    const roomId = `user:${userId}`;
+    const targetUrl = normalizePublicHttpUrl(req.body.url);
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
     const regionNames = Object.keys(queue);
 
     // 1. Batch insert DB documents using insertMany in a single round-trip
     const docsToInsert = regionNames.map((regionName) => ({
-      userId,
-      url,
+      ...(userId ? { userId } : { guestId }),
+      roomId,
+      url: targetUrl,
       region: regionName,
       status: "queued",
     }));
@@ -113,10 +121,12 @@ export const allRegionttfbFinder = async (req, res) => {
         const job = await workerQueue.add(
           "measure-ttfb-all",
           {
-            targetUrl: url,
+            targetUrl,
             userId,
+            guestId,
             ttfbdbId,
             region: regionName,
+            roomId,
           },
           {
             jobId: ttfbdbId,
@@ -137,10 +147,14 @@ export const allRegionttfbFinder = async (req, res) => {
       region: "All",
       roomId,
       jobs,
+      guest: !userId,
+      remaining: userId ? undefined : req.guestDemoRemaining,
+      totalLimit: userId ? undefined : req.guestDemoTotalLimit,
     });
   } catch (error) {
     console.error("allRegionttfbFinder error:", error);
 
+    await releaseGuestDemoReservation(req);
     return res.status(500).json({
       success: false,
       message: "Failed to create TTFB jobs",

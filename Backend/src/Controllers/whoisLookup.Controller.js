@@ -1,5 +1,6 @@
 import { WhoisLookup } from "../Models/whoisLookup.Model.js";
 import { whoisLookup } from "../queue/WhoisLookup.Queue.js";
+import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
 
 export const whoisLookupController = async (req, res) => {
   let whoisDb = null;
@@ -13,25 +14,28 @@ export const whoisLookupController = async (req, res) => {
       });
     }
 
-    const targetUrl = url.trim();
-    const userId = req.user._id.toString();
-    const roomId = `user:${userId}`;
+    const targetUrl = req.targetUrl || url.trim();
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
-    // 1. Create DB record first with status 'queued'
+    // 1. Create DB record with status 'queued'
     whoisDb = await WhoisLookup.create({
-      userId,
+      ...(userId ? { userId } : { guestId }),
+      roomId,
       url: targetUrl,
       status: "queued",
     });
 
     const whoisDbId = whoisDb._id.toString();
 
-    // 2. Add job inside queue with db data inside job and set job id as db id
+    // 2. Add job inside queue
     const job = await whoisLookup.add(
       "whoisLookup-queue",
       {
         targetUrl,
         userId,
+        guestId,
         whoisDbId,
         recordId: whoisDbId,
         roomId,
@@ -44,6 +48,7 @@ export const whoisLookupController = async (req, res) => {
 
     if (!job) {
       await WhoisLookup.findByIdAndDelete(whoisDb._id);
+      await releaseGuestDemoReservation(req);
       return res.status(500).json({
         success: false,
         error: "Failed to queue WHOIS lookup",
@@ -56,10 +61,15 @@ export const whoisLookupController = async (req, res) => {
       jobId: job.id,
       whoisDbId,
       roomId,
+      guest: !userId,
+      remaining: req.guestDemoRemaining,
+      totalLimit: req.guestDemoTotalLimit,
       data: whoisDb,
     });
   } catch (err) {
     console.error("[whoisLookupController] error:", err);
+
+    await releaseGuestDemoReservation(req);
 
     if (whoisDb?._id) {
       await WhoisLookup.findByIdAndDelete(whoisDb._id).catch(() => {});
