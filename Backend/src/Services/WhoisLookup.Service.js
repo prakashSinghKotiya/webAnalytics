@@ -1,7 +1,7 @@
 import {getDomain} from "tldts";
 
 const DEFAULT_TIMEOUT = 9000;
-const RDAP_BASE_URL = "https://rdap.org";
+const RDAP_BASE_URL = process.env.RDAP_URL
 
 export async function checkRDAPLookup(targetUrl, options = {}) {
     const { timeout = DEFAULT_TIMEOUT} = options;
