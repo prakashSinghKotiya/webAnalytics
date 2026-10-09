@@ -176,8 +176,7 @@ export async function measureTTFB(targetUrl, { timeoutMs = 20000, samples = DEFA
       ok: good[good.length - 1].ok,
        ttfb: pick("serverWait"),        // headline: matches ByteCheck / DevTools "Waiting"
     totalToFirstByte: pick("ttfb"),   // full: DNS + TCP + TLS + wait
-      // ttfb: pick("ttfb"),             
-      // serverWait: pick("serverWait"), // comparable to browser DevTools "Waiting"
+     
       dns: pick("dns"),
       tcp: pick("tcp"),
       tls: pick("tls"),
