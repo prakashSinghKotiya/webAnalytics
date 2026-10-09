@@ -16,6 +16,7 @@
     "cookie": "^2.0.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
+    "dns-packet": "^5.6.1",
     "dompurify": "^3.4.15",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",

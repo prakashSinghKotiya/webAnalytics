@@ -19,6 +19,7 @@ export const handleQueueEvent = (queueEvent, region, io) => {
     try {
       let raw = returnvalue || returnValue;
       let data = typeof raw === "string" ? JSON.parse(raw) : raw;
+      
 
       if (!data) {
         console.warn(`[TTFB ${region}] No returnvalue data found for job ${jobId}`);
