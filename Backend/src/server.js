@@ -10,13 +10,12 @@ import  AuthRoutes from "./Routes/Auth.Routes.js"
 import  AdminRoutes from "./Routes/Admin.Routes.js"
 import checkAuth from './Middleware/authentication.Mw.js';
 import cookieParser from 'cookie-parser';
-// import { checkDnsRecords } from './Services/dnsRecordtype.Service.js';
-// import { findRedirects } from './Services/redirectCheck.Service.js';
-// import { runPageSpeed } from './Services/psInsight.Service.js';
+
 import DnsRecordRoutes from './Routes/dnsRecord.Routes.js';
 import RedirectCheckRoutes from './Routes/redirectCheck.Routes.js';
 import WhoisLookupRoutes from './Routes/whoisLookup.Routes.js';
 import { initializeGuestDemo } from './Middleware/guestDemo.Mw.js';
+import { startallworkers } from './Workers/worker.js';
 
 
 
@@ -25,6 +24,8 @@ try {
     await connectdb();
     console.log("Database connected successfully.");
 } catch (err) { console.error("Database connection failed: ", err); }
+
+startallworkers()
 
 export const app = express()
 app.set('trust proxy', 1)

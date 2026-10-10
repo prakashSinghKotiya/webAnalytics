@@ -10,13 +10,19 @@ console.log("=".repeat(60));
 console.log("[Worker Process] Initializing Web Analysis Background Workers...");
 console.log("=".repeat(60));
 
-try {
-  await connectdb();
-  console.log("[Worker Process] MongoDB connected successfully.");
-} catch (err) {
-  console.error("[Worker Process] Database connection failed:", err);
-  process.exit(1);
-}
+// try {
+//   await connectdb();
+//   console.log("[Worker Process] MongoDB connected successfully.");
+// } catch (err) {
+//   console.error("[Worker Process] Database connection failed:", err);
+//   process.exit(1);
+// }
+
+
+export const   startallworkers=()=>{
+  console.log("=".repeat(60));
+console.log("[Worker Process] Initializing Web Analysis Background Workers...");
+console.log("=".repeat(60));
 
 const regions = ["india", "europe", "usa"];
 const workers = [];
@@ -56,6 +62,8 @@ console.log("[Worker] WHOIS lookup worker active");
 console.log("=".repeat(60));
 console.log(`[Worker Process] All ${workers.length} workers are active and listening for jobs.`);
 console.log("=".repeat(60));
+
+}
 
 const shutdown = async (signal) => {
   console.log(`\n[Worker Process] Received ${signal}. Shutting down all workers safely...`);
