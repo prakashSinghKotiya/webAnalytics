@@ -7,8 +7,8 @@ const defaultJobOptions = {
     type: "exponential",
     delay: 1000, // delay doubled on each retry (1s, 2s, 4s)
   },
-  removeOnComplete: { age: 60, count: 1000 },
-  removeOnFail: { age: 60, count: 1000 },
+  removeOnComplete: { age: 300, count: 500 },
+  removeOnFail: { age: 300, count: 500 },
 };
 
 export const indiaTtfbQueue = new Queue("ttfb-india", {

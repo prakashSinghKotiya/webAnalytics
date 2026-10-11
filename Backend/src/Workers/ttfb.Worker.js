@@ -20,9 +20,13 @@ export const startTtfbWorker = (region) => {
         );
       }
 
+      console.log("roomid :",roomId)
+
+      
+
       try {
         const result = await measureTTFB(targetUrl);
-        console.log(`[${targetRegion}] TTFB result:`, result);
+        console.log(`[${targetRegion}] TTFB result came `);
 
         const isSuccess = Boolean(result && result.success);
 

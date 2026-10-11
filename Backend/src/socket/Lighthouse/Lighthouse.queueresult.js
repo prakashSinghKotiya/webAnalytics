@@ -31,6 +31,7 @@ export const handleQueueEvent = (queueEvent, io) => {
         console.warn(`[Lighthouse] No roomId present in job ${jobId} returnvalue`);
         return;
       }
+
       const payload = {
         jobId,
         lighthousedbId: data.lighthousedbId || jobId,
@@ -39,11 +40,17 @@ export const handleQueueEvent = (queueEvent, io) => {
         status: data.status || "completed",
       };
 
-      // Emit to user room (supporting both naming conventions for compatibility)
+      const sockets = await io.in(roomId).fetchSockets();
+      if (!sockets || sockets.length === 0) {
+        console.warn(`[Lighthouse] Room ${roomId} has 0 connected sockets. Result is persisted in DB for job ${jobId}.`);
+      } else {
+        console.log(`[Lighthouse] Result emitted to ${sockets.length} socket(s) in room: ${roomId} for job: ${jobId}`);
+      }
+
+      // Emit standard and legacy events
+      io.to(roomId).emit("lighthouse:result", payload);
       io.to(roomId).emit("lighthouseCompleted", payload);
       io.to(roomId).emit("Lighthouse-completed", payload);
-
-      console.log(`[Lighthouse] Result emitted to room: ${roomId} for job: ${jobId}`);
     } catch (err) {
       console.error(`[Lighthouse] Error processing completed event for job ${jobId}:`, err);
     }
@@ -96,6 +103,12 @@ export const handleQueueEvent = (queueEvent, io) => {
           status: "failed",
         };
 
+        const sockets = await io.in(userRoom).fetchSockets();
+        if (!sockets || sockets.length === 0) {
+          console.warn(`[Lighthouse] Room ${userRoom} has 0 connected sockets on fail for job ${jobId}.`);
+        }
+
+        io.to(userRoom).emit("lighthouse:result", failPayload);
         io.to(userRoom).emit("lighthouseCompleted", failPayload);
         io.to(userRoom).emit("Lighthouse-failed", failPayload);
 

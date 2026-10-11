@@ -3,6 +3,7 @@ import {
   allRegionttfbFinder,
   getTtfbById,
   getTtfbResults,
+  getTtfbStatus,
   ttfbFinder,
 } from "../Controllers/ttfb.Controller.js";
 import checkAuth from "../Middleware/authentication.Mw.js";
@@ -18,6 +19,7 @@ router.post("/find", optionalActor, guestDemoRateLimiter, validateTtfbDemoReques
 // probes. The reservation wraps the whole fan-out, not each regional job.
 router.post("/findAll", optionalActor, guestDemoRateLimiter, validateAllTtfbDemoRequest, reserveGuestDemo("ttfb"), allRegionttfbFinder);
 router.get("/results", checkAuth, getTtfbResults);
-router.get("/result/:id", checkAuth, getTtfbById);
+router.get("/result/:id", optionalActor, getTtfbById);
+router.get("/status/:id", optionalActor, getTtfbStatus);
 
 export default router;

@@ -128,3 +128,89 @@ export const getWhoisLookupResults = async (req, res) => {
     });
   }
 };
+
+export const getWhoisLookupById = async (req, res) => {
+  try {
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const { id } = req.params;
+
+    const query = { _id: id };
+    if (userId) {
+      query.userId = userId;
+    } else if (guestId) {
+      query.guestId = guestId;
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication or guest session required",
+      });
+    }
+
+    const result = await WhoisLookup.findOne(query).lean();
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "WHOIS lookup record not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("getWhoisLookupById error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch WHOIS record",
+    });
+  }
+};
+
+export const getWhoisLookupStatus = async (req, res) => {
+  try {
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const { id } = req.params;
+
+    const query = { _id: id };
+    if (userId) {
+      query.userId = userId;
+    } else if (guestId) {
+      query.guestId = guestId;
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication or guest session required",
+      });
+    }
+
+    const result = await WhoisLookup.findOne(query).lean();
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "WHOIS lookup record not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      jobId: result._id.toString(),
+      whoisDbId: result._id.toString(),
+      status: result.status,
+      result: result.result,
+      error: result.error || null,
+      createdAt: result.createdAt,
+      completedAt: result.completedAt || null,
+    });
+  } catch (error) {
+    console.error("getWhoisLookupStatus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch WHOIS lookup status",
+    });
+  }
+};

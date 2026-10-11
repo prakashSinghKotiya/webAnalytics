@@ -2,7 +2,7 @@ import http from "http";
 import { app } from "./server.js";
 import { Server } from "socket.io";
 
-//import "./Workers/worker.js"
+
 
 import { setupTtfbQueueResult } from "./socket/ttfb/ttfb.queueresult.js";
 import { UptimeRobotEventHandler } from "./socket/UptimeMonitor/uptime.queueresult.js";
@@ -28,11 +28,18 @@ app.set("io", io);
 
 io.use(socketAuthMiddleware);
 
+
+import { handleSocketCatchup } from "./socket/catchup.Service.js";
+
 io.on("connection", (socket) => {
   const roomIds = socket.data.roomIds || [];
   console.log("socket connected to rooms:", roomIds);
 
   socket.join(roomIds);
+
+  socket.on("catchup", async (data) => {
+    await handleSocketCatchup(socket, data);
+  });
 
   socket.on("disconnect", () => {
     console.log("Socket disconnected:", socket.id);

@@ -3,12 +3,27 @@ import cookieParser from "cookie-parser";
 import Session from "../Models/Session.Model.js";
 import { guestCookieName } from "./guestDemo.Mw.js";
 
+const parseCookies = (header) => {
+  if (!header || typeof header !== "string") return {};
+  try {
+    if (typeof cookie.parseCookie === "function") {
+      return cookie.parseCookie(header);
+    }
+    if (typeof cookie.parse === "function") {
+      return cookie.parse(header);
+    }
+  } catch (err) {
+    console.error("[SocketAuth] Cookie parse failed:", err.message);
+  }
+  return {};
+};
+
 export const socketAuthMiddleware = async (socket, next) => {
   try {
     const cookieHeader = socket.handshake.headers.cookie;
     if (!cookieHeader) return next(new Error("Authentication required. No cookies found."));
 
-    const cookies = cookie.parseCookie(cookieHeader);
+    const cookies = parseCookies(cookieHeader);
     const rawToken = cookies.sid;
 
     // 1. Authenticated user takes priority: joins ONLY their user room
@@ -45,3 +60,4 @@ export const socketAuthMiddleware = async (socket, next) => {
     next(new Error("Invalid authentication token"));
   }
 };
+

@@ -36,6 +36,8 @@ export const startRedirectWorker = () => {
         );
       }
 
+      console.log("roomid :", effectiveRoomId)
+
       try {
         // 1. Mark as processing in DB
         await RedirectCheck.findByIdAndUpdate(dbId, {

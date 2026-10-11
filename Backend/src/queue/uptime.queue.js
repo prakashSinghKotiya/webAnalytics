@@ -7,8 +7,8 @@ const defaultJobOptions = {
     type: "exponential",
     delay: 1000, // after every retry delay will be doubled (1s, 2s, 4s)
   },
-  removeOnComplete: { age: 60, count: 1000 }, 
-  removeOnFail: { age: 60, count: 1000 },
+  removeOnComplete: { age: 600, count: 2000 }, 
+  removeOnFail: { age: 1800, count: 2000 },
 };
 
 export const uptimeMonitorQueue = new Queue("uptimeRobot-india", {

@@ -1,10 +1,9 @@
 import { QueueEvents } from "bullmq";
-import { sharedWorkerRedisConnection } from "../config/redis.js";
+import { queueEventsConn2 } from "../config/redis.js";
 
 export const dnsRecordCheckListener = new QueueEvents("dnsRecordCheck-queue", {
-  connection: sharedWorkerRedisConnection,
+  connection: queueEventsConn2
 });
 
 export const dnsRecordQueueEvents = dnsRecordCheckListener;
 export default dnsRecordCheckListener;
-

@@ -76,10 +76,17 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
         error: data?.error || null,
       };
 
+      const sockets = await io.in(userRoom).fetchSockets();
+      if (!sockets || sockets.length === 0) {
+        console.warn(`[whoisLookup] Room ${userRoom} has 0 connected sockets. Result is persisted in DB for job ${jobId}.`);
+      } else {
+        console.log(`[whoisLookup] Result emitted to ${sockets.length} socket(s) in room: ${userRoom} for job: ${jobId}`);
+      }
+
+      // Emit standard and legacy events
+      io.to(userRoom).emit("whois:result", payload);
       io.to(userRoom).emit("whoisLookupCompleted", payload);
       io.to(userRoom).emit("whoisLookup-completed", payload);
-
-      console.log(`[whoisLookup] Result emitted to room: ${userRoom} for job: ${jobId}`);
     } catch (err) {
       console.error(`[whoisLookup] Error handling completed event for job ${jobId}:`, err);
     }
@@ -131,8 +138,18 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
         roomId: userRoom,
         status: "failed",
         error: failedReason || "WHOIS lookup failed",
+        result: {
+          status: "failed",
+          error: failedReason || "WHOIS lookup failed",
+        },
       };
 
+      const sockets = await io.in(userRoom).fetchSockets();
+      if (!sockets || sockets.length === 0) {
+        console.warn(`[whoisLookup] Room ${userRoom} has 0 connected sockets on fail for job ${jobId}.`);
+      }
+
+      io.to(userRoom).emit("whois:result", payload);
       io.to(userRoom).emit("whoisLookupFailed", payload);
       io.to(userRoom).emit("whoisLookup-failed", payload);
 

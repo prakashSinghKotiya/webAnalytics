@@ -83,9 +83,6 @@ export const dnsRecordLookup = async (req, res) => {
   }
 };
 
-
-
-
 export const getDnsRecordResults = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -141,18 +138,25 @@ export const getDnsRecordResults = async (req, res) => {
   }
 };
 
-
-
-
 export const getDnsRecordById = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
     const { id } = req.params;
 
-    const result = await DnsRecord.findOne({
-      _id: id,
-      userId,
-    }).lean();
+    const query = { _id: id };
+    if (userId) {
+      query.userId = userId;
+    } else if (guestId) {
+      query.guestId = guestId;
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication or guest session required",
+      });
+    }
+
+    const result = await DnsRecord.findOne(query).lean();
 
     if (!result) {
       return res.status(404).json({
@@ -170,6 +174,52 @@ export const getDnsRecordById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch DNS record",
+    });
+  }
+};
+
+export const getDnsRecordStatus = async (req, res) => {
+  try {
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const { id } = req.params;
+
+    const query = { _id: id };
+    if (userId) {
+      query.userId = userId;
+    } else if (guestId) {
+      query.guestId = guestId;
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication or guest session required",
+      });
+    }
+
+    const result = await DnsRecord.findOne(query).lean();
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "DNS record not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      jobId: result._id.toString(),
+      dnsRecordId: result._id.toString(),
+      status: result.status,
+      result: result.result,
+      error: result.error || null,
+      createdAt: result.createdAt,
+      completedAt: result.completedAt || null,
+    });
+  } catch (error) {
+    console.error("getDnsRecordStatus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch DNS record status",
     });
   }
 };

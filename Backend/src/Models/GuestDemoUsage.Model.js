@@ -20,6 +20,10 @@ const guestDemoUsageSchema = new Schema(
     },
     history: [
       {
+        reservationId: {
+          type: String,
+          index: true,
+        },
         service: {
           type: String,
           enum: ["ttfb", "lighthouse", "whois", "dns", "redirect"],

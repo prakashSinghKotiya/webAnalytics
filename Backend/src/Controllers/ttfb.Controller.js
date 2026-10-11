@@ -10,6 +10,7 @@ const queue = {
 };
 
 export const ttfbFinder = async (req, res) => {
+  let ttfbDb = null;
   try {
     const { region } = req.body;
 
@@ -28,7 +29,7 @@ export const ttfbFinder = async (req, res) => {
     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
     // Create DB record first with status 'queued'
-    const ttfbDb = await Ttfb.create({
+    ttfbDb = await Ttfb.create({
       ...(userId ? { userId } : { guestId }),
       roomId,
       url,
@@ -68,14 +69,21 @@ export const ttfbFinder = async (req, res) => {
   } catch (error) {
     console.error("ttfbFinder error:", error);
     await releaseGuestDemoReservation(req);
+
+    if (ttfbDb?._id) {
+      await Ttfb.findByIdAndDelete(ttfbDb._id).catch(() => {});
+    }
+
     return res.status(500).json({
       success: false,
       message: "Failed to create TTFB job",
+      error: error.message,
     });
   }
 };
 
 export const allRegionttfbFinder = async (req, res) => {
+  let insertedDocs = [];
   try {
     const { region } = req.body;
 
@@ -109,7 +117,7 @@ export const allRegionttfbFinder = async (req, res) => {
       status: "queued",
     }));
 
-    const insertedDocs = await Ttfb.insertMany(docsToInsert);
+    insertedDocs = await Ttfb.insertMany(docsToInsert);
 
     // 2. Add jobs concurrently to each respective regional queue sharing the redis connection
     const jobs = await Promise.all(
@@ -155,16 +163,18 @@ export const allRegionttfbFinder = async (req, res) => {
     console.error("allRegionttfbFinder error:", error);
 
     await releaseGuestDemoReservation(req);
+
+    if (insertedDocs.length) {
+      await Ttfb.deleteMany({ _id: { $in: insertedDocs.map((d) => d._id) } }).catch(() => {});
+    }
+
     return res.status(500).json({
       success: false,
       message: "Failed to create TTFB jobs",
+      error: error.message,
     });
   }
 };
-
-
-
-
 
 export const getTtfbResults = async (req, res) => {
   try {
@@ -227,17 +237,25 @@ export const getTtfbResults = async (req, res) => {
   }
 };
 
-
-
 export const getTtfbById = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
     const { id } = req.params;
 
-    const result = await Ttfb.findOne({
-      _id: id,
-      userId,
-    }).lean();
+    const query = { _id: id };
+    if (userId) {
+      query.userId = userId;
+    } else if (guestId) {
+      query.guestId = guestId;
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication or guest session required",
+      });
+    }
+
+    const result = await Ttfb.findOne(query).lean();
 
     if (!result) {
       return res.status(404).json({
@@ -255,6 +273,53 @@ export const getTtfbById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch TTFB record",
+    });
+  }
+};
+
+export const getTtfbStatus = async (req, res) => {
+  try {
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const { id } = req.params;
+
+    const query = { _id: id };
+    if (userId) {
+      query.userId = userId;
+    } else if (guestId) {
+      query.guestId = guestId;
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication or guest session required",
+      });
+    }
+
+    const result = await Ttfb.findOne(query).lean();
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "TTFB record not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      jobId: result._id.toString(),
+      ttfbdbId: result._id.toString(),
+      status: result.status,
+      region: result.region,
+      result: result.result,
+      error: result.error || null,
+      createdAt: result.createdAt,
+      completedAt: result.completedAt || null,
+    });
+  } catch (error) {
+    console.error("getTtfbStatus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch TTFB status",
     });
   }
 };

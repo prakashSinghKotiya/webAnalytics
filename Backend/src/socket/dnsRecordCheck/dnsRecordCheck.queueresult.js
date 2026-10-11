@@ -42,11 +42,17 @@ export const handleDnsQueueEvent = (queueEvent, io) => {
         status: data.status || "completed",
       };
 
-      // Emit to destination room
+      const sockets = await io.in(roomId).fetchSockets();
+      if (!sockets || sockets.length === 0) {
+        console.warn(`[dnsRecordCheck] Room ${roomId} has 0 connected sockets. Result is persisted in DB for job ${jobId}.`);
+      } else {
+        console.log(`[dnsRecordCheck] Result emitted to ${sockets.length} socket(s) in room: ${roomId} for job: ${jobId}`);
+      }
+
+      // Emit standard and legacy events
+      io.to(roomId).emit("dns:result", payload);
       io.to(roomId).emit("dnsRecordCompleted", payload);
       io.to(roomId).emit("dnsRecordCheck-completed", payload);
-
-      console.log(`[dnsRecordCheck] Result emitted to room: ${roomId} for job: ${jobId}`);
     } catch (err) {
       console.error(`[dnsRecordCheck] Error processing completed event for job ${jobId}:`, err);
     }
@@ -75,14 +81,26 @@ export const handleDnsQueueEvent = (queueEvent, io) => {
       }
 
       if (targetRoom) {
-        io.to(targetRoom).emit("dnsRecordFailed", {
+        const failPayload = {
           jobId,
+          dnsRecordId: jobId,
+          roomId: targetRoom,
+          status: "failed",
           error: failedReason || "DNS record check failed",
-        });
-        io.to(targetRoom).emit("dnsRecordCheck-failed", {
-          jobId,
-          error: failedReason || "DNS record check failed",
-        });
+          result: {
+            status: "failed",
+            error: failedReason || "DNS record check failed",
+          },
+        };
+
+        const sockets = await io.in(targetRoom).fetchSockets();
+        if (!sockets || sockets.length === 0) {
+          console.warn(`[dnsRecordCheck] Room ${targetRoom} has 0 connected sockets on fail for job ${jobId}.`);
+        }
+
+        io.to(targetRoom).emit("dns:result", failPayload);
+        io.to(targetRoom).emit("dnsRecordFailed", failPayload);
+        io.to(targetRoom).emit("dnsRecordCheck-failed", failPayload);
       }
     } catch (err) {
       console.error(`[dnsRecordCheck] Error processing failed event for job ${jobId}:`, err);

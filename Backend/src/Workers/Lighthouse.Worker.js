@@ -19,12 +19,14 @@ export const startLighthouseWorker = () => {
         strategy = "mobile",
       } = job.data;
       const dbId = lighthousedbId || ligthouseId;
+       
 
       if (!targetUrl || !dbId || (!userId && !guestId) || !roomId) {
         throw new Error(
           `Invalid job data. targetUrl: ${targetUrl}, lighthousedbId: ${dbId}, actor: ${userId || guestId}`
         );
       }
+      console.log("roomid :",roomId)
 
       try {
         // Mark as processing in DB

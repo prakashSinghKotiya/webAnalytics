@@ -2,6 +2,8 @@ import express from "express";
 import {
   whoisLookupController,
   getWhoisLookupResults,
+  getWhoisLookupById,
+  getWhoisLookupStatus,
 } from "../Controllers/whoisLookup.Controller.js";
 import checkAuth from "../Middleware/authentication.Mw.js";
 import { optionalActor } from "../Middleware/guestDemo.Mw.js";
@@ -21,5 +23,7 @@ router.post(
 );
 
 router.get("/results", checkAuth, getWhoisLookupResults);
+router.get("/result/:id", optionalActor, getWhoisLookupById);
+router.get("/status/:id", optionalActor, getWhoisLookupStatus);
 
 export default router;

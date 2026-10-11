@@ -7,8 +7,8 @@ const defaultJobOptions = {
     type: "exponential",
     delay: 1000,
   },
-  removeOnComplete: { age: 60, count: 1000 },
-  removeOnFail: { age: 60, count: 1000 },
+  removeOnComplete: { age: 600, count: 2000 },
+  removeOnFail: { age: 1800, count: 2000 },
 };
 
 export const dnsRecordCheck = new Queue("dnsRecordCheck-queue", {

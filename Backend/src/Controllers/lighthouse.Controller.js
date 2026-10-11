@@ -3,8 +3,8 @@ import { Lighthouequeue } from "../queue/Lighthouse.queue.js";
 import { normalizePublicHttpUrl } from "../Services/publicUrl.Service.js";
 import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
 
-
 export const LighthouseResult = async (req, res) => {
+  let lighthouseDb = null;
   try {
     const { strategy: requestedStrategy = "mobile" } = req.body;
     const strategy = req.lighthouseStrategy || requestedStrategy;
@@ -32,7 +32,7 @@ export const LighthouseResult = async (req, res) => {
     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
     // 1. Create DB record first with status 'queued'
-    const lighthouseDb = await Lighthouse.create({
+    lighthouseDb = await Lighthouse.create({
       ...(userId ? { userId } : { guestId }),
       roomId,
       url: targetUrl,
@@ -72,6 +72,11 @@ export const LighthouseResult = async (req, res) => {
   } catch (error) {
     console.error("LighthouseResult error:", error);
     await releaseGuestDemoReservation(req);
+
+    if (lighthouseDb?._id) {
+      await Lighthouse.findByIdAndDelete(lighthouseDb._id).catch(() => {});
+    }
+
     return res.status(500).json({
       success: false,
       message: "Failed to create Lighthouse job",
@@ -79,9 +84,6 @@ export const LighthouseResult = async (req, res) => {
     });
   }
 };
-
-
-
 
 export const getLighthouseResults = async (req, res) => {
   try {
@@ -138,17 +140,25 @@ export const getLighthouseResults = async (req, res) => {
   }
 };
 
-
-
 export const getLighthouseById = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
     const { id } = req.params;
 
-    const result = await Lighthouse.findOne({
-      _id: id,
-      userId,
-    }).lean();
+    const query = { _id: id };
+    if (userId) {
+      query.userId = userId;
+    } else if (guestId) {
+      query.guestId = guestId;
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication or guest session required",
+      });
+    }
+
+    const result = await Lighthouse.findOne(query).lean();
 
     if (!result) {
       return res.status(404).json({
@@ -166,6 +176,53 @@ export const getLighthouseById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch Lighthouse record",
+    });
+  }
+};
+
+export const getLighthouseStatus = async (req, res) => {
+  try {
+    const userId = req.user?._id?.toString();
+    const guestId = req.guestId;
+    const { id } = req.params;
+
+    const query = { _id: id };
+    if (userId) {
+      query.userId = userId;
+    } else if (guestId) {
+      query.guestId = guestId;
+    } else {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication or guest session required",
+      });
+    }
+
+    const result = await Lighthouse.findOne(query).lean();
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: "Lighthouse record not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      jobId: result._id.toString(),
+      lighthousedbId: result._id.toString(),
+      status: result.status,
+      strategy: result.strategy,
+      result: result.result,
+      error: result.error || null,
+      createdAt: result.createdAt,
+      completedAt: result.completedAt || null,
+    });
+  } catch (error) {
+    console.error("getLighthouseStatus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch Lighthouse status",
     });
   }
 };

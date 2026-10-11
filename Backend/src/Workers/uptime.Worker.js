@@ -17,6 +17,8 @@ export const startUptimeWorker = () => {
       }
 
       const targetRoomId = roomId || (userId ? `user:${userId}` : null);
+
+      console.log("room id ",targetRoomId )
       const checkedAt = new Date();
 
       if (!userId) {

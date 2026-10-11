@@ -1,17 +1,14 @@
 import { QueueEvents } from "bullmq";
-import connection, { sharedWorkerRedisConnection } from "../config/redis.js"
-
-
+import {  queueEventsConn2 } from "../config/redis.js";
 
 export const indiaTtfbQueueEvent = new QueueEvents("ttfb-india", {
-        connection: sharedWorkerRedisConnection
-    });
+    connection: queueEventsConn2
+});
 
 export const europeTtfbQueueEvent = new QueueEvents("ttfb-europe", {
-        connection: sharedWorkerRedisConnection
-    });
+    connection: queueEventsConn2
+});
 
 export const usaTtfbQueueEvent = new QueueEvents("ttfb-usa", {
-        connection: sharedWorkerRedisConnection
-    });
-
+    connection: queueEventsConn2
+});

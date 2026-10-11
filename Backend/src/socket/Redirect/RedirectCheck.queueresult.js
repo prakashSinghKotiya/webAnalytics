@@ -76,10 +76,17 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         error: data?.error || null,
       };
 
+      const sockets = await io.in(userRoom).fetchSockets();
+      if (!sockets || sockets.length === 0) {
+        console.warn(`[redirectCheck] Room ${userRoom} has 0 connected sockets. Result is persisted in DB for job ${jobId}.`);
+      } else {
+        console.log(`[redirectCheck] Result emitted to ${sockets.length} socket(s) in room: ${userRoom} for job: ${jobId}`);
+      }
+
+      // Emit standard and legacy events
+      io.to(userRoom).emit("redirect:result", payload);
       io.to(userRoom).emit("redirectCheckCompleted", payload);
       io.to(userRoom).emit("redirect-completed", payload);
-
-      console.log(`[redirectCheck] Result emitted to room: ${userRoom} for job: ${jobId}`);
     } catch (err) {
       console.error(`[redirectCheck] Error handling completed event for job ${jobId}:`, err);
     }
@@ -131,8 +138,18 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         roomId: userRoom,
         status: "failed",
         error: failedReason || "Redirect check failed",
+        result: {
+          status: "failed",
+          error: failedReason || "Redirect check failed",
+        },
       };
 
+      const sockets = await io.in(userRoom).fetchSockets();
+      if (!sockets || sockets.length === 0) {
+        console.warn(`[redirectCheck] Room ${userRoom} has 0 connected sockets on fail for job ${jobId}.`);
+      }
+
+      io.to(userRoom).emit("redirect:result", payload);
       io.to(userRoom).emit("redirectCheckFailed", payload);
       io.to(userRoom).emit("redirect-failed", payload);
 

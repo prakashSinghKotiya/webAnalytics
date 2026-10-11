@@ -12,6 +12,7 @@ export const startDnsWorker = () => {
       const { targetUrl, userId, guestId, dnsRecordId, recordId, roomId } = job.data;
       const dbId = dnsRecordId || recordId;
       const targetRoomId = roomId || (userId ? `user:${userId}` : guestId ? `guest:${guestId}` : null);
+      console.log("roomid :",targetRoomId)
 
       if (!targetUrl || !dbId || (!userId && !guestId)) {
         throw new Error(
@@ -26,7 +27,7 @@ export const startDnsWorker = () => {
         });
 
         const result = await checkDnsRecords(targetUrl);
-        console.log(`[dnsRecordCheck] Job ${job.id} result:`, result);
+        console.log(`[dnsRecordCheck] Job ${job.id} result came`);
 
         const isSuccess = Boolean(result && (!result.status || result.status !== "failed"));
 

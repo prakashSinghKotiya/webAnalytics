@@ -29,44 +29,61 @@ export const UptimeRobotEventResult = (event, io) => {
                 return;
             }
 
-            io.to(userRoom).emit("uptimeCompleted", {
+            const payload = {
                 jobId,
                 roomId: userRoom,
                 monitorId: data.monitorId,
                 url: data.url,
                 result: data.result,
                 status: data.status || "completed",
-            });
+            };
+
+            const sockets = await io.in(userRoom).fetchSockets();
+            if (!sockets || sockets.length === 0) {
+                console.warn(`[Uptime] Room ${userRoom} has 0 connected sockets. Result is persisted in DB for job ${jobId}.`);
+            } else {
+                console.log(`[Uptime] Result emitted to ${sockets.length} socket(s) in room: ${userRoom} for job: ${jobId}`);
+            }
+
+            io.to(userRoom).emit("uptime:result", payload);
+            io.to(userRoom).emit("uptimeCompleted", payload);
         } catch (err) {
             console.error(`[Uptime] Error handling completed event for job ${jobId}:`, err);
         }
     });
 
-    // Failed event: update DB and emit failure without getJob
+    // Failed event: update DB and emit failure
     event.on("failed", async ({ jobId, failedReason }) => {
         console.error(`[Uptime] Job ${jobId} failed:`, failedReason);
-        const job =  await uptimeMonitorQueue.getJob(jobId);
-         if (!job) {
-            console.warn(`[Uptime] Job ${jobId} no longer exists`);
-            return;
+        let roomId = null;
+        try {
+            const job = await uptimeMonitorQueue.getJob(jobId);
+            roomId = job?.data?.roomId;
+        } catch (jobErr) {
+            console.error(`[Uptime] Error getting job ${jobId} on failure:`, jobErr.message);
         }
 
-        const { roomId } = job?.data 
+        if (roomId) {
+            try {
+                const failPayload = {
+                    jobId,
+                    roomId,
+                    error: failedReason || "Uptime check failed",
+                    status: "failed",
+                };
 
-        try {
-            // jobId for scheduler jobs usually contains scheduler or pattern, or we inspect failedReason
-            // If job failed in worker, worker already updated DB if monitorId was known.
-            // If emitted to room, we emit an error event
-            io.to(roomId).emit("uptimeMonitor-failed", {
-                jobId,
-                error: failedReason || "Uptime check failed",
-                status: "failed",
-            });
-        } catch (err) {
-            console.error(`[Uptime] Error processing failed event for job ${jobId}:`, err);
+                const sockets = await io.in(roomId).fetchSockets();
+                if (!sockets || sockets.length === 0) {
+                    console.warn(`[Uptime] Room ${roomId} has 0 connected sockets on fail for job ${jobId}.`);
+                }
+
+                io.to(roomId).emit("uptime:result", failPayload);
+                io.to(roomId).emit("uptimeMonitor-failed", failPayload);
+            } catch (err) {
+                console.error(`[Uptime] Error processing failed event for job ${jobId}:`, err);
+            }
         }
     });
 };
 
-
-
+export default UptimeRobotEventHandler;

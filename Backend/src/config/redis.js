@@ -1,10 +1,11 @@
 import Redis from "ioredis";
 
 export const redisConnectionOptions = {
-  host: process.env.REDIS_HOST || "127.0.0.1",
-  port: Number(process.env.REDIS_PORT || process.env.REDIS_port || 6379),
-  username: process.env.REDIS_USERNAME || undefined,
-  password: process.env.REDIS_PASSWORD || undefined,
+  host: process.env.REDIS_HOST ,
+  port: Number(process.env.REDIS_PORT ),
+  username: process.env.REDIS_USERNAME ,
+  password: process.env.REDIS_PASSWORD ,
+
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
   keepAlive: 10000,
@@ -16,7 +17,7 @@ export const redisConnectionOptions = {
 // BullMQ requires maxRetriesPerRequest: null for blocking/worker compatibility and client reuse.
 export const sharedRedisConnection = new Redis({
   ...redisConnectionOptions,
-  maxRetriesPerRequest: null,
+
 });
 
 sharedRedisConnection.on("connect", () => {
@@ -27,9 +28,19 @@ sharedRedisConnection.on("error", (err) => {
   console.error("[Redis] Shared client error:", err.message);
 });
 
-// For BullMQ Workers and QueueEvents: export the shared Redis client instance
-// so BullMQ reuses it for regular commands and only duplicates for blocking commands.
+// For BullMQ Workers: shared connection is fine (BullMQ duplicates internally for blocking ops)
 export const sharedWorkerRedisConnection = sharedRedisConnection;
+
+// QueueEvents requires a dedicated connection per instance (uses XREAD BLOCK).
+// Factory creates a new ioredis instance per QueueEvents call — not a persistent shared client.
+
+
+export const queueEventsConn1 = new Redis({ ...redisConnectionOptions, maxRetriesPerRequest: null });
+export const queueEventsConn2 = new Redis({ ...redisConnectionOptions, maxRetriesPerRequest: null });
+
+
+
+
 
 export const connection = sharedRedisConnection;
 

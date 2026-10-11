@@ -44,7 +44,7 @@ export const startWhoisWorker = () => {
 
         // 2. Perform WHOIS / RDAP lookup
         const result = await checkRDAPLookup(targetUrl);
-        console.log(`[whoisLookup] Job ${job.id} result:`, result);
+        console.log(`[whoisLookup] Job ${job.id} result came `);
 
         const isSuccess = Boolean(result && result.success !== false && !result.error);
         const errorMessage = isSuccess
@@ -58,6 +58,9 @@ export const startWhoisWorker = () => {
           error: errorMessage,
           completedAt: new Date(),
         });
+
+        console.log("rooom id ", effectiveRoomId)
+
 
         console.log(`[whoisLookup] Job ${job.id} completed with status: ${isSuccess ? "completed" : "failed"}`);
 

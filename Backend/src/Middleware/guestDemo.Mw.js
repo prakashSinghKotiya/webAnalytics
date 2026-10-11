@@ -28,6 +28,7 @@ export const optionalActor = async (req, res, next) => {
         const user = await User.findById(session.userId).lean();
         if (user && !user.deleted) {
           req.user = user;
+          req.roomId = `user:${user._id}`;
           return next();
         }
       }
@@ -40,6 +41,7 @@ export const optionalActor = async (req, res, next) => {
     }
 
     req.guestId = guestId;
+    req.roomId = `guest:${guestId}`;
     return next();
   } catch (error) {
     return next(error);
@@ -49,13 +51,22 @@ export const optionalActor = async (req, res, next) => {
 // Call this before opening Socket.IO. It both establishes the signed cookie and
 // tells the client which room its already-authorized socket will join.
 export const initializeGuestDemo = (req, res) => {
-  const guestId = req.signedCookies?.[GUEST_COOKIE];
+  let guestId = req.signedCookies?.[GUEST_COOKIE];
   if (!validGuestId(guestId)) {
-    const newGuestId = crypto.randomBytes(16).toString("hex");
-    res.cookie(GUEST_COOKIE, newGuestId, guestCookieOptions);
+    guestId = crypto.randomBytes(16).toString("hex");
+    res.cookie(GUEST_COOKIE, guestId, guestCookieOptions);
+  } else {
+    // Refresh cookie expiry to maintain active session
+    res.cookie(GUEST_COOKIE, guestId, guestCookieOptions);
   }
 
-  return res.status(204).end();
+  const roomId = `guest:${guestId}`;
+  return res.status(200).json({
+    success: true,
+    guestId,
+    roomId,
+  });
 };
 
 export const guestCookieName = GUEST_COOKIE;
+

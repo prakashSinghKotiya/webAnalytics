@@ -3,6 +3,7 @@ import {
   dnsRecordLookup,
   getDnsRecordById,
   getDnsRecordResults,
+  getDnsRecordStatus,
 } from "../Controllers/dnsRecord.Controller.js";
 import checkAuth from "../Middleware/authentication.Mw.js";
 import { optionalActor } from "../Middleware/guestDemo.Mw.js";
@@ -22,6 +23,7 @@ router.post(
 );
 
 router.get("/results", checkAuth, getDnsRecordResults);
-router.get("/result/:id", checkAuth, getDnsRecordById);
+router.get("/result/:id", optionalActor, getDnsRecordById);
+router.get("/status/:id", optionalActor, getDnsRecordStatus);
 
 export default router;

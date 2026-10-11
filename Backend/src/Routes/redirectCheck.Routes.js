@@ -2,6 +2,8 @@ import express from "express";
 import {
   redirectCheckController,
   getRedirectCheckResults,
+  getRedirectCheckById,
+  getRedirectCheckStatus,
 } from "../Controllers/redirectCheck.Controller.js";
 import checkAuth from "../Middleware/authentication.Mw.js";
 import { optionalActor } from "../Middleware/guestDemo.Mw.js";
@@ -21,5 +23,7 @@ router.post(
 );
 
 router.get("/results", checkAuth, getRedirectCheckResults);
+router.get("/result/:id", optionalActor, getRedirectCheckById);
+router.get("/status/:id", optionalActor, getRedirectCheckStatus);
 
 export default router;

@@ -2,6 +2,7 @@ import express from "express";
 import {
   getLighthouseById,
   getLighthouseResults,
+  getLighthouseStatus,
   LighthouseResult,
 } from "../Controllers/lighthouse.Controller.js";
 import checkAuth from "../Middleware/authentication.Mw.js";
@@ -14,6 +15,7 @@ const router = express.Router();
 
 router.post("/report", optionalActor, guestDemoRateLimiter, validateLighthouseDemoRequest, reserveGuestDemo("lighthouse"), LighthouseResult);
 router.get("/results", checkAuth, getLighthouseResults);
-router.get("/result/:id", checkAuth, getLighthouseById);
+router.get("/result/:id", optionalActor, getLighthouseById);
+router.get("/status/:id", optionalActor, getLighthouseStatus);
 
 export default router;

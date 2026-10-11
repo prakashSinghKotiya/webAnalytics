@@ -1,10 +1,9 @@
 import { QueueEvents } from "bullmq";
-import { sharedWorkerRedisConnection } from "../config/redis.js";
+import {  queueEventsConn2 } from "../config/redis.js";
 
 export const redirectQueueListener = new QueueEvents("redirect-queue", {
-  connection: sharedWorkerRedisConnection,
+  connection:queueEventsConn2
 });
 
 export const redirectQueueEvents = redirectQueueListener;
 export default redirectQueueListener;
-
