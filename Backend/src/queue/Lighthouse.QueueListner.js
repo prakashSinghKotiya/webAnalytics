@@ -1,8 +1,8 @@
 import { QueueEvents } from "bullmq";
-import { createQueueEventsConnection } from "../config/redis.js";
+import {  queueEventsConn2 } from "../config/redis.js";
 
 export const LighthouequeueListner = new QueueEvents("lighthouse-queue", {
-  connection: createQueueEventsConnection(),
+  connection: queueEventsConn2
 });
 
 export const lighthouseQueueEvents = LighthouequeueListner;
