@@ -132,8 +132,8 @@ export const loginUser = async(req, res, next)=>{
         sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     });
 
-    // If an existing socket was connected under this guest cookie, migrate it to the user room
-    const guestId = req.signedCookies?.[guestCookieName];
+    // If an existing socket was connected under this guest session, migrate it to the user room
+    const guestId = req.headers["x-guest-id"] || req.body?.guestId || req.signedCookies?.[guestCookieName];
     if (guestId) {
       const io = req.app.get("io");
       if (io) {
@@ -159,7 +159,19 @@ export const loginUser = async(req, res, next)=>{
       }
     }
 
-    res.json({ message: "logged in" });
+    res.json({
+      message: "logged in",
+      token: session._id.toString(),
+      sessionId: session._id.toString(),
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        picture: user.picture,
+        plan: user.plans || "free",
+        role: user.role || "User",
+      },
+    });
 }
     catch(err){
         console.log(err)
@@ -275,8 +287,10 @@ export const DeleteUser = async(req,res,next)=>{ //rbac
 
 
 export const logout = async (req, res) => {
-    const { sid } = req.signedCookies;
-    const session = sid ? await Session.findByIdAndDelete(sid) : null;
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+    const sid = req.sessionId || req.signedCookies?.sid || bearerToken || req.headers["x-session-id"];
+    const session = sid && mongoose.Types.ObjectId.isValid(sid) ? await Session.findByIdAndDelete(sid) : null;
 
     const io = req.app.get("io");
     if (session?.userId && io) {

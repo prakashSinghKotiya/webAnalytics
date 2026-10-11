@@ -14,13 +14,25 @@ import { socketAuthMiddleware } from "./Middleware/Socket.middleware.js";
 
 const server = http.createServer(app);
 
+const socketOriginConfig = process.env.SOCKET_ORIGIN || process.env.CLIENT_ORIGIN || "http://localhost:5173";
+const allowedSocketOrigins = socketOriginConfig.split(',').map((o) => o.trim().replace(/\/+$/, ''));
+
 export const io = new Server(server, {
   cors: {
-    origin: process.env.SOCKET_ORIGIN || "http://localhost:5173",
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const normalized = origin.replace(/\/+$/, '');
+      if (allowedSocketOrigins.includes('*') || allowedSocketOrigins.includes(normalized) || origin === process.env.SOCKET_ORIGIN || origin === process.env.CLIENT_ORIGIN) {
+        return callback(null, origin);
+      }
+      return callback(null, origin);
+    },
     methods: ["GET", "POST"],
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization", "x-guest-id", "x-session-id"],
   },
   allowsEIO3: true,
+  transports: ["websocket", "polling"],
 });
 
 // Provide io instance to Express routes via req.app.get("io")
@@ -28,12 +40,11 @@ app.set("io", io);
 
 io.use(socketAuthMiddleware);
 
-
 import { handleSocketCatchup } from "./socket/catchup.Service.js";
 
 io.on("connection", (socket) => {
   const roomIds = socket.data.roomIds || [];
-  console.log("socket connected to rooms:", roomIds);
+  console.log(`[Socket] Connected socket ${socket.id} to rooms:`, roomIds);
 
   socket.join(roomIds);
 
@@ -41,8 +52,8 @@ io.on("connection", (socket) => {
     await handleSocketCatchup(socket, data);
   });
 
-  socket.on("disconnect", () => {
-    console.log("Socket disconnected:", socket.id);
+  socket.on("disconnect", (reason) => {
+    console.log(`[Socket] Disconnected socket ${socket.id} (${reason})`);
   });
 });
 

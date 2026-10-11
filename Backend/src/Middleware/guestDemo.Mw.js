@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import mongoose from "mongoose";
 import Session from "../Models/Session.Model.js";
 import User from "../Models/User.Model.js";
 
@@ -20,25 +21,38 @@ const validGuestId = (value) =>
 // Only the demo routes mount it; account routes continue to use checkAuth.
 export const optionalActor = async (req, res, next) => {
   try {
-    const sessionId = req.signedCookies?.sid;
+    // 1. Check for authenticated user via Bearer token, x-session-id header, or signed cookie
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+    const sessionId = req.signedCookies?.sid || bearerToken || req.headers["x-session-id"];
 
-    if (sessionId) {
+    if (sessionId && mongoose.Types.ObjectId.isValid(sessionId)) {
       const session = await Session.findById(sessionId).lean();
       if (session) {
         const user = await User.findById(session.userId).lean();
         if (user && !user.deleted) {
           req.user = user;
+          req.sessionId = session._id.toString();
           req.roomId = `user:${user._id}`;
           return next();
         }
       }
     }
 
-    let guestId = req.signedCookies?.[GUEST_COOKIE];
+    // 2. Check for guest session via x-guest-id header, query parameter, body, or signed cookie
+    const headerGuestId = req.headers["x-guest-id"] || req.query?.guestId || req.body?.guestId;
+    let guestId = validGuestId(headerGuestId) ? headerGuestId : req.signedCookies?.[GUEST_COOKIE];
+
     if (!validGuestId(guestId)) {
       guestId = crypto.randomBytes(16).toString("hex");
       res.cookie(GUEST_COOKIE, guestId, guestCookieOptions);
+    } else {
+      // Refresh cookie expiry to maintain active session when supported
+      res.cookie(GUEST_COOKIE, guestId, guestCookieOptions);
     }
+
+    // Expose header so clients (like iOS Safari) can read and save it even if cookies are blocked
+    res.setHeader("x-guest-id", guestId);
 
     req.guestId = guestId;
     req.roomId = `guest:${guestId}`;
@@ -51,7 +65,9 @@ export const optionalActor = async (req, res, next) => {
 // Call this before opening Socket.IO. It both establishes the signed cookie and
 // tells the client which room its already-authorized socket will join.
 export const initializeGuestDemo = (req, res) => {
-  let guestId = req.signedCookies?.[GUEST_COOKIE];
+  const headerGuestId = req.headers["x-guest-id"] || req.query?.guestId;
+  let guestId = validGuestId(headerGuestId) ? headerGuestId : req.signedCookies?.[GUEST_COOKIE];
+
   if (!validGuestId(guestId)) {
     guestId = crypto.randomBytes(16).toString("hex");
     res.cookie(GUEST_COOKIE, guestId, guestCookieOptions);
@@ -59,6 +75,8 @@ export const initializeGuestDemo = (req, res) => {
     // Refresh cookie expiry to maintain active session
     res.cookie(GUEST_COOKIE, guestId, guestCookieOptions);
   }
+
+  res.setHeader("x-guest-id", guestId);
 
   const roomId = `guest:${guestId}`;
   return res.status(200).json({
@@ -69,4 +87,5 @@ export const initializeGuestDemo = (req, res) => {
 };
 
 export const guestCookieName = GUEST_COOKIE;
+
 

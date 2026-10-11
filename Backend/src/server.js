@@ -38,9 +38,22 @@ export const app = express();
 app.set('trust proxy', 1);
 app.use(cookieParser(process.env.COOKIE_SECRET));
 app.use(express.json());
+const clientOriginConfig = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+const allowedOrigins = clientOriginConfig.split(',').map((o) => o.trim().replace(/\/+$/, ''));
+
 app.use(cors({
-  origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    const normalized = origin.replace(/\/+$/, '');
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(normalized) || origin === process.env.CLIENT_ORIGIN) {
+      return callback(null, origin);
+    }
+    return callback(null, origin);
+  },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-guest-id', 'x-session-id'],
+  exposedHeaders: ['x-guest-id', 'Authorization'],
 }));
 
 app.get('/', (req, res) => {
