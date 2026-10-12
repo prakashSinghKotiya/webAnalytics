@@ -140,9 +140,9 @@ export const loginUser = async(req, res, next)=>{
         const guestRoom = `guest:${guestId}`;
         const userRoom = `user:${user._id}`;
         try {
-          const sockets = await io.in(guestRoom).fetchSockets();
+          const sockets = await io.in(guestRoom).fetchSockets(); // fetch all socket inside the guest room
           for (const s of sockets) {
-            s.leave(guestRoom);
+            s.leave(guestRoom);  // migrating guest userroom
             s.join(userRoom);
             s.data.userId = user._id.toString();
             s.data.roomId = userRoom;
