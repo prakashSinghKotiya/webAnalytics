@@ -9,6 +9,8 @@ import Session from "../Models/Session.Model.js"
 import { loginSchema, registerSchema } from "../Validators/ZodSchema.js"
 import z from "zod"
 import { guestCookieName } from "../Middleware/guestDemo.Mw.js"
+import { UptimeMonitor } from "../Models/UptimeMonitor.Model.js"
+import { removeUptimeScheduler } from "../Services/uptimeScheduler.Service.js"
 
 
 
@@ -270,20 +272,45 @@ export const adminPowerlogout = async(req,res,next)=>{ //rbac
 
 
 
-export const DeleteUser = async(req,res,next)=>{ //rbac
+export const DeleteUser = async (req, res, next) => { //rbac
+  const { userId } = req.params;
+  if (req.user._id.toString() === userId) {  //disabling self delete 
+    return res.status(403).json({ error: "you cannot delete yourself" });
+  }
 
-      const {userId} = req.params
-      if(req.user._id.toString()  === userId){  //disabling self delete 
-        return res.status(403).json({error : "you cannot delete yourself" }) 
-      } 
+  try {
+    await Session.deleteMany({ userId });
+    await User.findByIdAndUpdate(userId, { deleted: true }); //soft delete 
 
-        try {
-      await Session.deleteMany({userId})
-      await User.findByIdAndUpdate(userId , { deleted : true}) //soft delete 
-    
+    // Disconnect user's active sockets if any
+    const io = req.app.get("io");
+    if (io) {
+      try {
+        io.in(`user:${userId}`).disconnectSockets(true);
+      } catch (sockErr) {
+        console.warn(`[DeleteUser] Could not disconnect sockets for user ${userId}:`, sockErr.message);
+      }
+    }
+
+    // Pause and remove schedulers for user's active monitors
+    try {
+      const activeMonitors = await UptimeMonitor.find({ userId, status: "active" });
+      for (const monitor of activeMonitors) {
+        await removeUptimeScheduler(monitor._id, `user:${userId}`);
+        await UptimeMonitor.findByIdAndUpdate(monitor._id, { status: "paused" });
+      }
+    } catch (schedErr) {
+      console.warn(`[DeleteUser] Could not pause schedulers for user ${userId}:`, schedErr.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "User deleted and active monitors paused successfully"
+    });
   } catch (error) {
-    next(error)
-    }}    
+    next(error);
+  }
+};    
 
 
 export const logout = async (req, res) => {
@@ -316,4 +343,7 @@ export const logout = async (req, res) => {
     });
     res.status(204).end();
 };
+
+
+
 

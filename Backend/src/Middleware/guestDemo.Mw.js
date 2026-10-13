@@ -39,7 +39,7 @@ export const optionalActor = async (req, res, next) => {
       }
     }
 
-    // 2. Check for guest session via x-guest-id header, query parameter, body, or signed cookie
+    // checcking for guest session via signed cookie or x-guest-id header and setting or extendding the cookie if needed
     const headerGuestId = req.headers["x-guest-id"] || req.query?.guestId || req.body?.guestId;
     let guestId = validGuestId(headerGuestId) ? headerGuestId : req.signedCookies?.[GUEST_COOKIE];
 

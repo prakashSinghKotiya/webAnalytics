@@ -33,14 +33,12 @@ export default async function checkAuth(req, res, next) {
 
 
 
-export const adminChecker = (req, res , next )=>{ 
-    if(req.user.role !== "User") return next()
-       res.status(403).json({ error: "You can not access users" });
+export const adminChecker = (req, res, next) => {
+  if (req.user && req.user.role !== "User") return next();
+  return res.status(403).json({ error: "Access denied: Admin privileges required" });
+};
 
-}
-
-export const isAdmin = (req, res , next )=>{  // rbac mw power onlny for amdmin
-    if(req.user.role !== "Admin") return next()
-       res.status(403).json({ error: "You can not access users" }); 
-
-}
+export const isAdmin = (req, res, next) => { // rbac mw power only for admin
+  if (req.user && req.user.role === "Admin") return next();
+  return res.status(403).json({ error: "Access denied: Admin role required" });
+};

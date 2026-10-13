@@ -81,67 +81,62 @@ export const createMonitor = async (req, res) => {
 // UPDATE
 
 export const updateMonitor = async (req, res) => {
-
     try {   
         const { id } = req.params;
-        const { url, interval , status } = req.body;
-        const roomId = `user:${req.user._id}`
+        const { url, interval, status } = req.body;
 
-
-
-        try{
-            new URL(url)
-        }
-        catch(err){
+        try {
+            new URL(url);
+        } catch (err) {
             return res.status(400).json({ error: "Invalid URL format. Include http:// or https://" });
         }
 
-        if(!ALLOWED_INTERVALS.has(interval)){
+        if (!ALLOWED_INTERVALS.has(interval)) {
             return res.status(400).json({
                 error: `Invalid interval. Allowed values are: ${[...ALLOWED_INTERVALS].join(", ")}`
-            })
+            });
         }
 
-        if(!ALLOWED_STATUSES.has(status)){
-            return res.status(400).json({  error: `Invalid Status. `
-            })
+        if (!ALLOWED_STATUSES.has(status)) {
+            return res.status(400).json({ error: `Invalid Status.` });
         }
 
-        const monitor = await UptimeMonitor.findByIdAndUpdate(id , {
-            url : url,
-            interval : interval,
-            status : status
-        } , {returnDocument : "after"}).lean()
+        const existing = await UptimeMonitor.findById(id);
+        if (!existing) {
+            return res.status(404).json({ error: "Monitor not found" });
+        }
 
-        if (!monitor) { return res.status(404).json({  error: "Monitor not found"  }); }
+        const isOwner = existing.userId.toString() === req.user._id.toString();
+        const isAdminUser = req.user.role === "Admin";
+        if (!isOwner && !isAdminUser) {
+            return res.status(403).json({ error: "Access denied: You do not have permission to update this monitor." });
+        }
 
+        const roomId = `user:${existing.userId}`;
 
-        
+        const monitor = await UptimeMonitor.findByIdAndUpdate(id, {
+            url: url,
+            interval: interval,
+            status: status
+        }, { returnDocument: "after" }).lean();
 
-           try {
+        try {
             if (monitor.status === "active") {
-                await updateUptimeScheduler(monitor,roomId);
-            }else if(monitor.status === "paused"){
-                await removeUptimeScheduler(monitor._id , roomId)
+                await updateUptimeScheduler(monitor, roomId);
+            } else if (monitor.status === "paused") {
+                await removeUptimeScheduler(monitor._id, roomId);
             }
+        } catch (schedulerError) {
+            console.error(`[MonitorUpdate] Scheduler sync failed for ${id}:`, schedulerError);
+            return res.status(500).json({ 
+                error: "Database updated, but failed to sync the background timer. Please try again." 
+            });
+        }
 
-            } catch (schedulerError) {
-                console.error(`[MonitorUpdate] Scheduler sync failed for ${id}:`, schedulerError);
-                return res.status(500).json({ 
-                    error: "Database updated, but failed to sync the background timer. Please try again." 
-                }); }
-
-        return res.status(200).json({  message: "Monitor updated",  monitor });
-
-
+        return res.status(200).json({ message: "Monitor updated", monitor });
     } catch (error) {
-
         console.error(error);
-
-        return res.status(500).json({
-            error: error.message
-        });
-
+        return res.status(500).json({ error: error.message });
     }
 };
 
@@ -152,12 +147,10 @@ export const updateMonitor = async (req, res) => {
 export const pauseMonitor = async (req, res) => {
     try {
         const { id } = req.params;
-         const roomId = `user:${req.user._id}`
 
         if (!id) {
             return res.status(400).json({ error: "Monitor ID is required" });
         }
-
 
         const monitor = await UptimeMonitor.findById(id);
         
@@ -165,24 +158,28 @@ export const pauseMonitor = async (req, res) => {
             return res.status(404).json({ error: "Monitor not found" });
         }
 
+        const isOwner = monitor.userId.toString() === req.user._id.toString();
+        const isAdminUser = req.user.role === "Admin";
+        if (!isOwner && !isAdminUser) {
+            return res.status(403).json({ error: "Access denied: You do not have permission to pause this monitor." });
+        }
+
+        const roomId = `user:${monitor.userId}`;
+
         try {
-            await removeUptimeScheduler(monitor._id,roomId); 
+            await removeUptimeScheduler(monitor._id, roomId); 
         } catch (error) {
-        
             return res.status(500).json({ 
                 error: "Failed to pause the background scheduler. Please try again." 
             });
         }
 
-        
         monitor.status = "paused";
         await monitor.save();
 
         return res.status(200).json({ message: "Monitor paused", monitor }); 
-
     } catch (error) { 
         console.error(error); 
-    
         return res.status(500).json({ error: "An internal server error occurred." });
     }
 };
@@ -193,7 +190,6 @@ export const pauseMonitor = async (req, res) => {
 export const resumeMonitor = async (req, res) => {
     try {
         const { id } = req.params;
-        const roomId = `user:${req.user._id}`
         const monitor = await UptimeMonitor.findById(id);
 
         if (!monitor) { 
@@ -201,6 +197,14 @@ export const resumeMonitor = async (req, res) => {
                 error: "Monitor not found"
             });      
         }
+
+        const isOwner = monitor.userId.toString() === req.user._id.toString();
+        const isAdminUser = req.user.role === "Admin";
+        if (!isOwner && !isAdminUser) {
+            return res.status(403).json({ error: "Access denied: You do not have permission to resume this monitor." });
+        }
+
+        const roomId = `user:${monitor.userId}`;
 
         if (monitor.status === "active") {
             return res.status(200).json({
@@ -212,15 +216,12 @@ export const resumeMonitor = async (req, res) => {
         // Store previous status in case we need to roll back
         const previousStatus = monitor.status;
         
-      
         monitor.status = "active";
         await monitor.save();
 
         try {
-            
-            await createUptimeScheduler(monitor,roomId);  //   Starting the scheduler
+            await createUptimeScheduler(monitor, roomId); // Starting the scheduler
         } catch (schedulerError) {
-            //  Rollback if the scheduler fails to start
             console.error("Failed to start scheduler, rolling back DB:", schedulerError);
             monitor.status = previousStatus; // Revert to paused/stopped
             await monitor.save();
@@ -230,18 +231,12 @@ export const resumeMonitor = async (req, res) => {
             });
         }
 
-
-
         return res.status(200).json({
             message: "Monitor resumed successfully",
             monitor
         });
-
-
     } catch (error) {
         console.error("Error resuming monitor:", error);
-        
-        // Do not expose raw error messages to the client in production
         return res.status(500).json({
             error: "An internal server error occurred while resuming the monitor"
         });
@@ -255,7 +250,6 @@ export const resumeMonitor = async (req, res) => {
 export const deleteMonitor = async (req, res) => {
     try {
         const { id } = req.params;
-        const roomId = `user:${req.user._id}`
 
         const monitor = await UptimeMonitor.findById(id);
 
@@ -265,26 +259,30 @@ export const deleteMonitor = async (req, res) => {
             });
         }
 
+        const isOwner = monitor.userId.toString() === req.user._id.toString();
+        const isAdminUser = req.user.role === "Admin";
+        if (!isOwner && !isAdminUser) {
+            return res.status(403).json({ error: "Access denied: You do not have permission to delete this monitor." });
+        }
+
+        const roomId = `user:${monitor.userId}`;
 
         try {
-            await removeUptimeScheduler(monitor._id,roomId);
+            await removeUptimeScheduler(monitor._id, roomId);
         } catch (schedulerError) {
-           
-            //not returnning we will delte it ayway from db , scheduler can be already dead 
             console.warn(`Failed to remove scheduler for monitor ${id}, proceeding with DB deletion:`, schedulerError);
         }
 
-        
-        await monitor.deleteOne();
+        await Promise.all([
+            monitor.deleteOne(),
+            UptimeResult.deleteMany({ monitorId: monitor._id }),
+        ]);
 
         return res.status(200).json({
             message: "Monitor deleted successfully"
         });
-
     } catch (error) {
         console.error("Error deleting monitor:", error);
-
-    
         return res.status(500).json({
             error: "An internal server error occurred while deleting the monitor"
         });
@@ -449,3 +447,26 @@ export const getRecentMonitorResults = async (req, res) => {
         });
     }
 };
+
+// Re-export admin RBAC monitor controller functions
+export {
+    adminGetMonitorStats,
+    adminGetTotalMonitors,
+    adminGetAllMonitors,
+    adminGetMonitorDetails,
+    adminPauseMonitor,
+    adminResumeMonitor,
+    adminActivateMonitor,
+    adminDeleteMonitor,
+    adminDeleteActiveMonitors,
+    adminBulkPauseMonitors,
+    adminBulkResumeMonitors,
+    adminTriggerMonitorCheck,
+    adminCreateMonitor,
+    adminUpdateMonitor,
+    adminBulkDeleteMonitors,
+    adminClearMonitorResults,
+    adminBulkUpdateInterval,
+    adminGetMonitorIncidents,
+    adminExportMonitors,
+} from "./Admin.Controller.js";
