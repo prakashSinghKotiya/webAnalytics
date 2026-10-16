@@ -28,6 +28,7 @@ export const otpSchema = z.object({
 export const gAuthSchema = z.object({
     name: z.string(),
     email: z.email(),
-    
-    
+    picture: z.string().optional(),
+    sub: z.string().optional(),
 })
+
