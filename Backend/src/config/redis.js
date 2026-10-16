@@ -5,7 +5,7 @@ export const redisConnectionOptions = {
   port: Number(process.env.REDIS_PORT ),
   username: process.env.REDIS_USERNAME ,
   password: process.env.REDIS_PASSWORD ,
-  tls:{},
+ // tls:{},
 
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
