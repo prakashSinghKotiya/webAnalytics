@@ -91,6 +91,13 @@ console.log("picture:", picture)
         secure: true
     })
 
+    res.clearCookie(guestCookieName, {
+  httpOnly: true,
+  signed: true,
+  secure: isProduction,
+  sameSite: "none" ,
+});
+
         const guestId = req.headers["x-guest-id"] || req.body?.guestId || req.signedCookies?.[guestCookieName];
         if (guestId) {
           const io = req.app.get("io");
@@ -121,7 +128,19 @@ console.log("picture:", picture)
 
     
         await mongooseSession.commitTransaction();
-        res.status(201).json({ message: "account created and logged in" });
+        res.status(201).json({
+      message: "logged in",
+      token: session._id.toString(),
+      sessionId: session._id.toString(),
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        picture: user.picture,
+        plan: user.plans || "free",
+        role: user.role || "User",
+      },
+    });
     
     
   }catch (err) {
