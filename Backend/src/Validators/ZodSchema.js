@@ -24,3 +24,10 @@ export const otpSchema = z.object({
     email: z.email(),
     otp: z.string().length(4)
 })
+
+export const gAuthSchema = z.object({
+    name: z.string(),
+    email: z.email(),
+    
+    
+})
