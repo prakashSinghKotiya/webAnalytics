@@ -75,7 +75,7 @@ console.log("picture:", picture)
             name,
             email,
             
-           
+            
           },],
           {  session: mongooseSession }
         );
@@ -90,6 +90,32 @@ console.log("picture:", picture)
         sameSite: "none",   
         secure: true
     })
+
+        const guestId = req.headers["x-guest-id"] || req.body?.guestId || req.signedCookies?.[guestCookieName];
+        if (guestId) {
+          const io = req.app.get("io");
+          if (io) {
+            const guestRoom = `guest:${guestId}`;
+            const userRoom = `user:${user._id}`;
+            try {
+              const sockets = await io.in(guestRoom).fetchSockets(); // fetch all socket inside the guest room
+              for (const s of sockets) {
+                s.leave(guestRoom);  // migrating guest userroom
+                s.join(userRoom);
+                s.data.userId = user._id.toString();
+                s.data.roomId = userRoom;
+                s.data.roomIds = [userRoom];
+                delete s.data.guestId;
+                s.emit("roomMigrated", { roomId: userRoom });
+              }
+              if (sockets.length > 0) {
+                console.log(`[Socket] Migrated ${sockets.length} socket(s) from ${guestRoom} to ${userRoom}`);
+              }
+            } catch (socketErr) {
+              console.error("[Socket] Error migrating guest sockets on login:", socketErr);
+            }
+          }
+        }
 
 
 
