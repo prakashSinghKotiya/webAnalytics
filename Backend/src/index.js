@@ -14,25 +14,18 @@ import { socketAuthMiddleware } from "./Middleware/Socket.middleware.js";
 
 const server = http.createServer(app);
 
-const socketOriginConfig = process.env.SOCKET_ORIGIN || process.env.CLIENT_ORIGIN || "http://localhost:5173";
-const allowedSocketOrigins = socketOriginConfig.split(',').map((o) => o.trim().replace(/\/+$/, ''));
+// const socketOriginConfig = process.env.SOCKET_ORIGIN || process.env.CLIENT_ORIGIN || "http://localhost:5173";
+// const allowedSocketOrigins = socketOriginConfig.split(',').map((o) => o.trim().replace(/\/+$/, ''));
 
 export const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      const normalized = origin.replace(/\/+$/, '');
-      if (allowedSocketOrigins.includes('*') || allowedSocketOrigins.includes(normalized) || origin === process.env.SOCKET_ORIGIN || origin === process.env.CLIENT_ORIGIN) {
-        return callback(null, origin);
-      }
-      return callback(null, origin);
-    },
+    origin: (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map((o) => o.trim().replace(/\/+$/, '')),
     methods: ["GET", "POST"],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization", "x-guest-id", "x-session-id"],
   },
-  allowsEIO3: true,
-  transports: ["websocket", "polling"],
+  allowEIO3: true,
+  transports: [ "polling","websocket",],
 });
 
 // Provide io instance to Express routes via req.app.get("io")
@@ -49,7 +42,11 @@ io.on("connection", (socket) => {
   socket.join(roomIds);
 
   socket.on("catchup", async (data) => {
-    await handleSocketCatchup(socket, data);
+  try {
+      await handleSocketCatchup(socket, data);
+    } catch (error) {
+      console.error(`[Socket] Error in catchup for ${socket.id}:`, error);
+    }
   });
 
   socket.on("disconnect", (reason) => {
