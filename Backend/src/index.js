@@ -1,5 +1,5 @@
 import http from "http";
-import { app } from "./server.js";
+import { app, isOriginAllowed } from "./server.js";
 import { Server } from "socket.io";
 
 
@@ -19,13 +19,18 @@ const server = http.createServer(app);
 
 export const io = new Server(server, {
   cors: {
-    origin: (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map((o) => o.trim().replace(/\/+$/, '')),
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        return callback(null, origin || true);
+      }
+      return callback(new Error(`Socket CORS blocked origin: ${origin}`));
+    },
     methods: ["GET", "POST"],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization", "x-guest-id", "x-session-id"],
   },
   allowEIO3: true,
-  transports: [ "polling","websocket",],
+  transports: ["polling", "websocket"],
 });
 
 // Provide io instance to Express routes via req.app.get("io")

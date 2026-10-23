@@ -38,16 +38,50 @@ export const app = express();
 app.set('trust proxy', 1);
 app.use(cookieParser(process.env.COOKIE_SECRET));
 app.use(express.json());
-// const clientOriginConfig = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
-// const allowedOrigins = clientOriginConfig.split(',').map((o) => o.trim().replace(/\/+$/, ''));
 
-app.use(cors({
-  origin:(process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map((o) => o.trim().replace(/\/+$/, '')),
+const defaultAllowedOrigins = [
+  'https://monitormyhost.com',
+  'https://www.monitormyhost.com',
+  'https://webpulse.monitormyhost.com',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+];
+
+const envAllowed = (process.env.CLIENT_ORIGIN || '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+export const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...envAllowed]));
+
+export const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  const normalized = origin.trim().replace(/\/+$/, '');
+  return (
+    allowedOrigins.includes(normalized) ||
+    allowedOrigins.includes('*') ||
+    /^https:\/\/(www\.|webpulse\.)?monitormyhost\.com$/i.test(normalized)
+  );
+};
+
+export const corsOptions = {
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      return callback(null, origin || true);
+    }
+    console.warn(`[CORS] Disallowed origin: "${origin}"`);
+    return callback(new Error(`CORS policy violation for origin: ${origin}`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-guest-id', 'x-session-id'],
   exposedHeaders: ['x-guest-id', 'Authorization'],
-}));
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+//app.options('*', cors(corsOptions));
 
 app.get('/', (req, res) => {
   res.send('running server');
