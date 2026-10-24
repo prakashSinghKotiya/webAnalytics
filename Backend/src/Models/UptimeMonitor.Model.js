@@ -28,6 +28,7 @@ const uptimeMonitorSchema = new Schema(
             enum: ["active", "paused"],
             default: "active"
         },
+        hostinginfo:{ type: Schema.Types.Mixed },
 
         lastResult: {
             type: Schema.Types.Mixed,

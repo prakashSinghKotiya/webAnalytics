@@ -29,6 +29,8 @@ export const UptimeRobotEventResult = (event, io) => {
                 return;
             }
 
+            const monitorDoc = await UptimeMonitor.findOne({ _id: data.monitorId }, { hostinginfo: 1 }).lean();
+
             const payload = {
                 jobId,
                 roomId: userRoom,
@@ -36,6 +38,7 @@ export const UptimeRobotEventResult = (event, io) => {
                 url: data.url,
                 result: data.result,
                 status: data.status || "completed",
+                hostinginfo: monitorDoc?.hostinginfo || null,
             };
 
             const sockets = await io.in(userRoom).fetchSockets();

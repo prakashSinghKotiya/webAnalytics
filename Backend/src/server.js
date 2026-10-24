@@ -24,6 +24,11 @@ import { Lighthouse } from './Models/Lighthouse.Model.js';
 import { DnsRecord } from './Models/dnsRecord.Model.js';
 import { RedirectCheck } from './Models/redirectCheck.Model.js';
 import { WhoisLookup } from './Models/whoisLookup.Model.js';
+// import { getDomainHostingInfo } from './Controllers/uptimeRobot.Controller.js';
+// import { checkUrl } from './Services/uptimeChecker.Service.js';
+
+
+
 
 try {
   await connectdb();
@@ -86,6 +91,17 @@ app.use(cors(corsOptions));
 app.get('/', (req, res) => {
   res.send('running server');
 });
+
+// app.post('/demo-uptime', async (req, res) => {
+//   const{url}= req.body
+//   let parsedUrl = new URL(url);
+//   const hsotinginfo = await getDomainHostingInfo(parsedUrl.hostname)
+//     const result = await checkUrl(url)
+//   res.json({result,hsotinginfo})
+// });
+
+
+
 
 // Demo Infrastructure Health Check
 app.get('/demo/health', async (req, res) => {
@@ -192,6 +208,8 @@ app.get('/demo/status/:service/:id', optionalActor, async (req, res) => {
     });
   }
 });
+
+
 
 // Demo & service routes
 app.use('/ttfb', ttfbRoute);

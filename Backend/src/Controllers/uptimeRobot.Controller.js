@@ -7,6 +7,117 @@ import {
     removeUptimeScheduler
 } from "../Services/uptimeScheduler.Service.js";
 
+import dns from "node:dns/promises";
+import net from "node:net";
+
+
+
+
+const resolver = new dns.Resolver({ timeout: 3000, tries: 2 });
+
+const NOT_FOUND = "Not Found";
+const orgCache = new Map(); // ASN -> { value, expires }
+const ORG_TTL_MS = 6 * 60 * 60 * 1000;
+
+const expandIpv6 = (ip) => {
+    ip = ip.split("%")[0]; // strip zone id
+
+    // Convert trailing IPv4 (::ffff:1.2.3.4) into two hex groups
+    const v4 = ip.match(/(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4) {
+        const [a, b, c, d] = v4[1].split(".").map(Number);
+        const hex = (n) => n.toString(16).padStart(2, "0");
+        ip = ip.replace(v4[1], `${hex(a)}${hex(b)}:${hex(c)}${hex(d)}`);
+    }
+
+    const [head, tail] = ip.split("::");
+    const left = head ? head.split(":") : [];
+    const right = tail ? tail.split(":") : [];
+    const fill = ip.includes("::") ? Array(8 - left.length - right.length).fill("0") : [];
+
+    return [...left, ...fill, ...right].map((g) => g.padStart(4, "0")).join("");
+};
+
+const reverseIpv6ForDns = (ip) => expandIpv6(ip).split("").reverse().join(".");
+
+const isPublicIp = (ip) => {
+    const bl = new net.BlockList();
+    ["10.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+     "192.168.0.0/16", "100.64.0.0/10", "0.0.0.0/8"].forEach((r) => {
+        const [addr, bits] = r.split("/");
+        bl.addSubnet(addr, Number(bits), "ipv4");
+    });
+    bl.addAddress("::1", "ipv6");
+    bl.addSubnet("fc00::", 7, "ipv6");
+    bl.addSubnet("fe80::", 10, "ipv6");
+    return !bl.check(ip, net.isIPv6(ip) ? "ipv6" : "ipv4");
+};
+
+const resolveIp = async (hostname) => {
+    if (net.isIP(hostname)) return { ip: hostname, family: net.isIPv6(hostname) ? 6 : 4 };
+
+    // Race both families; prefer IPv4 if it succeeds
+    const [v4, v6] = await Promise.allSettled([
+        resolver.resolve4(hostname),
+        resolver.resolve6(hostname),
+    ]);
+    if (v4.status === "fulfilled" && v4.value[0]) return { ip: v4.value[0], family: 4 };
+    if (v6.status === "fulfilled" && v6.value[0]) return { ip: v6.value[0], family: 6 };
+    return null;
+};
+
+const getOrgName = async (asn) => {
+    const cached = orgCache.get(asn);
+    if (cached && cached.expires > Date.now()) return cached.value;
+
+    const records = await resolver.resolveTxt(`AS${asn}.asn.cymru.com`);
+    // Format: "ASN | CC | registry | allocated | AS Name, CC"
+    const raw = records[0].join("").split("|").pop()?.trim() || "";
+    const value = raw.replace(/,\s*[A-Z]{2}$/, "").trim() || NOT_FOUND;
+
+    orgCache.set(asn, { value, expires: Date.now() + ORG_TTL_MS });
+    return value;
+};
+
+export const getDomainHostingInfo = async (hostname) => {
+    const result = {
+        ip: null,
+        ipVersion: null,
+        hostedBy: NOT_FOUND,
+        asn: NOT_FOUND,
+        registryCountry: NOT_FOUND,
+    };
+
+    try {
+        const resolved = await resolveIp(hostname);
+        if (!resolved) return result;
+
+        result.ip = resolved.ip;
+        result.ipVersion = `IPv${resolved.family}`;
+
+        // Keep the IP even if everything below fails
+        if (!isPublicIp(resolved.ip)) return result;
+
+        const query =
+            resolved.family === 4
+                ? `${resolved.ip.split(".").reverse().join(".")}.origin.asn.cymru.com`
+                : `${reverseIpv6ForDns(resolved.ip)}.origin6.asn.cymru.com`;
+
+        const originRecords = await resolver.resolveTxt(query);
+        const [rawAsn, , country] = originRecords[0].join("").split("|").map((s) => s.trim());
+        const asnNumber = rawAsn?.split(" ")[0];
+        if (!asnNumber) return result;
+
+        result.asn = `AS${asnNumber}`;
+        result.registryCountry = country || NOT_FOUND;
+        result.hostedBy = await getOrgName(asnNumber);
+    } catch (err) {
+        console.warn(`[HostingLookup] ${hostname}:`, err.code || err.message);
+    }
+
+    return result; // partial data preserved
+};
+
 
 
 const ALLOWED_INTERVALS = new Set(["1m", "5m", "10m", "30m", "1h"]);
@@ -18,12 +129,15 @@ export const createMonitor = async (req, res) => {
     try {
         const { url, interval = "5m" } = req.body;
 
+        
+
         if (!url) {
             return res.status(400).json({ error: "URL is required." });
         }
+        let parsedurl 
 
         try {
-            new URL(url);
+          parsedurl = new URL(url);
         } catch (err) {
             return res.status(400).json({ error: "Invalid URL format. Include http:// or https://" });
         }
@@ -35,14 +149,16 @@ export const createMonitor = async (req, res) => {
         }
 
         const roomId = `user:${req.user._id}`
+        const hostinginfo =  await getDomainHostingInfo(parsedurl.hostname)
 
         const monitor = await UptimeMonitor.create({
-            url,
+            url:parsedurl.href,
             interval,
             status: "active",
-            userId: req.user._id
+            userId: req.user._id,
+            hostinginfo
         });
-
+ 
 
         try {
             await createUptimeScheduler(monitor,roomId);
@@ -62,7 +178,9 @@ export const createMonitor = async (req, res) => {
                 id: monitor._id,
                 url: monitor.url,
                 interval: monitor.interval,
-                status: monitor.status
+                status: monitor.status,
+                hostinginfo: monitor.hostinginfo,
+                
             }
         });
 
