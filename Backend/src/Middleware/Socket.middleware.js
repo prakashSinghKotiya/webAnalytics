@@ -1,8 +1,8 @@
 import * as cookie from "cookie";
 import cookieParser from "cookie-parser";
-import mongoose from "mongoose";
-import Session from "../Models/Session.Model.js";
+
 import { guestCookieName } from "./guestDemo.Mw.js";
+import { prisma } from "../config/db.prismaSQL.js";
 
 const parseCookies = (header) => {
   if (!header || typeof header !== "string") return {};
@@ -19,11 +19,20 @@ const parseCookies = (header) => {
   return {};
 };
 
+
+const isUuid = (value) =>
+  typeof value === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
+
+
+
+
 export const socketAuthMiddleware = async (socket, next) => {
   try {
     const cookieHeader = socket.handshake.headers.cookie;
     const cookies = parseCookies(cookieHeader);
-
+ 
     // 1. Authenticated user takes priority:
     // Sources: auth.token / auth.sessionId, Authorization header (Bearer), x-session-id header, query.token, or signed cookie (sid)
     const authPayloadToken = socket.handshake.auth?.token || socket.handshake.auth?.sessionId;
@@ -33,16 +42,21 @@ export const socketAuthMiddleware = async (socket, next) => {
     const queryToken = socket.handshake.query?.token;
     const rawCookieToken = cookies.sid;
     const cookieSessionId = rawCookieToken && cookieParser.signedCookie(rawCookieToken, process.env.COOKIE_SECRET);
-
+ 
     const candidateSessionId =
       authPayloadToken ||
       bearerToken ||
       headerToken ||
       queryToken ||
       (cookieSessionId && cookieSessionId !== rawCookieToken ? cookieSessionId : null);
-
-    if (candidateSessionId && mongoose.Types.ObjectId.isValid(candidateSessionId)) {
-      const session = await Session.findById(candidateSessionId).lean();
+ 
+    if (candidateSessionId && isUuid(candidateSessionId)) {
+    
+      // only a live (non-expired) session counts, postgres has no TTL auto-delete
+      const session = await prisma.session.findFirst({
+        where: { id: candidateSessionId, expiresAt: { gt: new Date() } },
+        select: { userId: true },
+      });
       if (session) {
         const userRoom = `user:${session.userId}`;
         socket.data.userId = session.userId.toString();
@@ -53,20 +67,20 @@ export const socketAuthMiddleware = async (socket, next) => {
         return next();
       }
     }
-
+ 
     // 2. Guest demo fallback: ONLY active if the user is unauthenticated
     // Sources: auth.guestId, query.guestId, x-guest-id header, or signed guest cookie (gid)
     const authGuestId = socket.handshake.auth?.guestId || socket.handshake.query?.guestId || socket.handshake.headers?.["x-guest-id"];
     const rawGuestCookie = cookies[guestCookieName];
     const cookieGuestId = rawGuestCookie && cookieParser.signedCookie(rawGuestCookie, process.env.COOKIE_SECRET);
-
+ 
     let guestId = null;
     if (typeof authGuestId === "string" && /^[a-f0-9]{32}$/i.test(authGuestId)) {
       guestId = authGuestId;
     } else if (typeof cookieGuestId === "string" && cookieGuestId !== rawGuestCookie && /^[a-f0-9]{32}$/i.test(cookieGuestId)) {
       guestId = cookieGuestId;
     }
-
+ 
     if (guestId) {
       const guestRoom = `guest:${guestId}`;
       socket.data.guestId = guestId;
@@ -76,7 +90,7 @@ export const socketAuthMiddleware = async (socket, next) => {
       console.log(`[SocketAuth] Guest demo client connected: ${guestId} (Room: ${guestRoom})`);
       return next();
     }
-
+ 
     console.warn(`[SocketAuth] Rejected connection from ${socket.id}: No valid session or guestId found.`);
     return next(new Error("Authentication required. Please provide a valid session token or guestId."));
   } catch (error) {
@@ -84,5 +98,5 @@ export const socketAuthMiddleware = async (socket, next) => {
     next(new Error("Invalid authentication token"));
   }
 };
-
+ 
 

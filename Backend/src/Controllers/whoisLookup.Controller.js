@@ -1,6 +1,7 @@
-import { WhoisLookup } from "../Models/whoisLookup.Model.js";
-import { whoisLookup } from "../queue/WhoisLookup.Queue.js";
+import { prisma } from "../config/db.prismaSQL.js";
+import { boss, whoisLookupQueue } from "../queue/WhoisLookup.Queue.js";
 import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
+import { resolveServiceRecord } from "../Services/jobIdResolver.Service.js";
 
 export const whoisLookupController = async (req, res) => {
   let whoisDb = null;
@@ -15,50 +16,40 @@ export const whoisLookupController = async (req, res) => {
     }
 
     const targetUrl = req.targetUrl || url.trim();
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
     // 1. Create DB record with status 'queued'
-    whoisDb = await WhoisLookup.create({
-      ...(userId ? { userId } : { guestId }),
-      roomId,
-      url: targetUrl,
-      status: "queued",
+    whoisDb = await prisma.whoisLookup.create({
+      data: {
+        ...(userId ? { userId } : { guestId }),
+        roomId,
+        url: targetUrl,
+        status: "queued",
+      },
     });
 
-    const whoisDbId = whoisDb._id.toString();
+    const whoisDbId = whoisDb.id.toString();
 
-    // 2. Add job inside queue
-    const job = await whoisLookup.add(
-      "whoisLookup-queue",
-      {
-        targetUrl,
-        userId,
-        guestId,
-        whoisDbId,
-        recordId: whoisDbId,
-        roomId,
-        dbData: whoisDb.toObject ? whoisDb.toObject() : whoisDb,
-      },
-      {
-        jobId: whoisDbId,
-      }
-    );
+    // 2. Add job inside pg-boss queue
+    const jobId = await boss.send(whoisLookupQueue, {
+      targetUrl,
+      userId,
+      guestId,
+      whoisDbId,
+      recordId: whoisDbId,
+      roomId,
+    });
 
-    if (!job) {
-      await WhoisLookup.findByIdAndDelete(whoisDb._id);
-      await releaseGuestDemoReservation(req);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to queue WHOIS lookup",
-      });
+    if (!jobId) {
+      throw new Error("Failed to enqueue WHOIS lookup job");
     }
 
     return res.status(202).json({
       success: true,
       message: "WHOIS lookup queued",
-      jobId: job.id,
+      jobId,
       whoisDbId,
       roomId,
       guest: !userId,
@@ -71,8 +62,8 @@ export const whoisLookupController = async (req, res) => {
 
     await releaseGuestDemoReservation(req);
 
-    if (whoisDb?._id) {
-      await WhoisLookup.findByIdAndDelete(whoisDb._id).catch(() => {});
+    if (whoisDb?.id) {
+      await prisma.whoisLookup.delete({ where: { id: whoisDb.id } }).catch(() => {});
     }
 
     return res.status(500).json({
@@ -85,28 +76,32 @@ export const whoisLookupController = async (req, res) => {
 
 export const getWhoisLookupResults = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user?.id != null ? Number(req.user.id) : Number(req.user?._id);
     const { page = 1, limit = 20, url, status = "completed" } = req.query;
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
-    const query = { userId };
+    const query = {
+      userId,
+      result: { not: null },
+    };
     if (status) {
       query.status = status;
     }
     if (url) {
-      query.url = { $regex: url.trim(), $options: "i" };
+      query.url = { contains: url.trim(), mode: "insensitive" };
     }
 
     const [results, total] = await Promise.all([
-      WhoisLookup.find(query)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      WhoisLookup.countDocuments(query),
+      prisma.whoisLookup.findMany({
+        where: query,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limitNum,
+      }),
+      prisma.whoisLookup.count({ where: query }),
     ]);
 
     return res.status(200).json({
@@ -131,11 +126,19 @@ export const getWhoisLookupResults = async (req, res) => {
 
 export const getWhoisLookupById = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
+    const whoisId = parseInt(id, 10);
+    if (Number.isNaN(whoisId)) {
+      return res.status(404).json({
+        success: false,
+        message: "WHOIS lookup record not found",
+      });
+    }
+
+    const query = { id: whoisId };
     if (userId) {
       query.userId = userId;
     } else if (guestId) {
@@ -147,7 +150,9 @@ export const getWhoisLookupById = async (req, res) => {
       });
     }
 
-    const result = await WhoisLookup.findOne(query).lean();
+    const result = await prisma.whoisLookup.findFirst({
+      where: query,
+    });
 
     if (!result) {
       return res.status(404).json({
@@ -171,40 +176,42 @@ export const getWhoisLookupById = async (req, res) => {
 
 export const getWhoisLookupStatus = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
-    if (userId) {
-      query.userId = userId;
-    } else if (guestId) {
-      query.guestId = guestId;
-    } else {
+    if (!userId && !guestId) {
       return res.status(401).json({
         success: false,
         message: "Authentication or guest session required",
       });
     }
 
-    const result = await WhoisLookup.findOne(query).lean();
+    const { doc } = await resolveServiceRecord({
+      service: "whois",
+      id,
+      userId,
+      guestId,
+    });
 
-    if (!result) {
+    if (!doc) {
       return res.status(404).json({
         success: false,
         message: "WHOIS lookup record not found",
       });
     }
 
+    const docIdStr = doc.id.toString();
     return res.status(200).json({
       success: true,
-      jobId: result._id.toString(),
-      whoisDbId: result._id.toString(),
-      status: result.status,
-      result: result.result,
-      error: result.error || null,
-      createdAt: result.createdAt,
-      completedAt: result.completedAt || null,
+      jobId: docIdStr,
+      whoisDbId: docIdStr,
+      id: doc.id,
+      status: doc.status,
+      result: doc.result,
+      error: doc.error || null,
+      createdAt: doc.createdAt,
+      completedAt: doc.completedAt || null,
     });
   } catch (error) {
     console.error("getWhoisLookupStatus error:", error);

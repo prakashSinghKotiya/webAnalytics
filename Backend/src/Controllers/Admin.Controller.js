@@ -1,19 +1,97 @@
-import mongoose, { Types } from "mongoose";
-import { UptimeMonitor } from "../Models/UptimeMonitor.Model.js";
-import { UptimeResult } from "../Models/UptimeResults.Model.js";
-import User from "../Models/User.Model.js";
+import { prisma } from "../config/db.prismaSQL.js";
+import { Prisma } from "@prisma/client";
+import net from "node:net";
+import dns from "node:dns/promises";
+import { performance } from "node:perf_hooks";
 import {
   createUptimeScheduler,
   updateUptimeScheduler,
   removeUptimeScheduler,
 } from "../Services/uptimeScheduler.Service.js";
 import { checkUrl } from "../Services/uptimeChecker.Service.js";
+import {
+  RUNNERS,
+  clearRunnerCache,
+  getActiveRunner,
+  ensureDefaultRunner,
+} from "../Services/runners/index.js";
 
 // Re-export existing user admin operations for unified controller access
 export { getAllUsers, adminPowerlogout, DeleteUser } from "./User.Controller.js";
+export {
+  promoteUserToAdmin,
+  demoteAdminToUser,
+  updateUserRole,
+  getUserRole,
+  getRoleAuditLogs,
+} from "./AdminRole.Controller.js";
 
-const ALLOWED_INTERVALS = new Set(["1m", "5m", "10m", "30m", "1h"]);
+const ALLOWED_INTERVALS = new Set(["1m", "5m", "10m", "15m", "30m", "1h", "m1", "m5", "m10", "m15", "m30", "h1"]);
 const ALLOWED_STATUSES = new Set(["active", "paused"]);
+
+const INTERVAL_TO_PRISMA = {
+  "1m": "m1",
+  "5m": "m5",
+  "10m": "m10",
+  "15m": "m15",
+  "30m": "m30",
+  "1h": "h1",
+  m1: "m1",
+  m5: "m5",
+  m10: "m10",
+  m15: "m15",
+  m30: "m30",
+  h1: "h1",
+};
+
+const PRISMA_TO_INTERVAL = {
+  m1: "1m",
+  m5: "5m",
+  m10: "10m",
+  m15: "15m",
+  m30: "30m",
+  h1: "1h",
+  "1m": "1m",
+  "5m": "5m",
+  "10m": "10m",
+  "15m": "15m",
+  "30m": "30m",
+  "1h": "1h",
+};
+
+const toPrismaInterval = (val) => INTERVAL_TO_PRISMA[val] || "m5";
+const fromPrismaInterval = (val) => PRISMA_TO_INTERVAL[val] || val;
+
+const formatAdminMonitor = (m) => {
+  if (!m) return null;
+  const { user, ...rest } = m;
+  return {
+    ...rest,
+    id: m.id,
+    _id: m.id,
+    interval: fromPrismaInterval(m.interval),
+    userId: user ? { ...user, _id: user.id } : m.userId,
+    runnerId: m.runnerId ?? null,
+    runner: m.runner
+      ? {
+          id: m.runner.id,
+          name: m.runner.name,
+          type: m.runner.type,
+          isActive: m.runner.isActive,
+          isDefault: m.runner.isDefault,
+        }
+      : null,
+  };
+};
+
+const formatResult = (r) => {
+  if (!r) return null;
+  return {
+    ...r,
+    id: r.id.toString(),
+    _id: r.id.toString(),
+  };
+};
 
 /**
  * GET /admin/monitors/stats
@@ -29,34 +107,58 @@ export const adminGetMonitorStats = async (req, res) => {
       upMonitors,
       downMonitors,
       pendingMonitors,
-      distinctUserIds,
+      distinctUsers,
       totalResultRecords,
-      intervalAgg,
+      intervalGroups,
     ] = await Promise.all([
-      UptimeMonitor.countDocuments(),
-      UptimeMonitor.countDocuments({ status: "active" }),
-      UptimeMonitor.countDocuments({ status: "paused" }),
-      UptimeMonitor.countDocuments({ "lastResult.status": "UP" }),
-      UptimeMonitor.countDocuments({ "lastResult.status": "DOWN" }),
-      UptimeMonitor.countDocuments({ lastResult: null }),
-      UptimeMonitor.distinct("userId"),
-      UptimeResult.countDocuments(),
-      UptimeMonitor.aggregate([
-        { $group: { _id: "$interval", count: { $sum: 1 } } },
-      ]),
+      prisma.uptimeMonitor.count(),
+      prisma.uptimeMonitor.count({ where: { status: "active" } }),
+      prisma.uptimeMonitor.count({ where: { status: "paused" } }),
+      prisma.uptimeMonitor.count({
+        where: {
+          lastResult: {
+            path: ["status"],
+            equals: "UP",
+          },
+        },
+      }),
+      prisma.uptimeMonitor.count({
+        where: {
+          lastResult: {
+            path: ["status"],
+            equals: "DOWN",
+          },
+        },
+      }),
+      prisma.uptimeMonitor.count({
+        where: {
+          lastResult: {
+            equals: Prisma.AnyNull,
+          },
+        },
+      }),
+      prisma.uptimeMonitor.groupBy({
+        by: ["userId"],
+      }),
+      prisma.uptimeResult.count(),
+      prisma.uptimeMonitor.groupBy({
+        by: ["interval"],
+        _count: { _all: true },
+      }),
     ]);
 
     const intervalBreakdown = {
       "1m": 0,
       "5m": 0,
-      "10m": 0,
+      "15m": 0,
       "30m": 0,
       "1h": 0,
     };
 
-    intervalAgg.forEach((item) => {
-      if (item._id && intervalBreakdown.hasOwnProperty(item._id)) {
-        intervalBreakdown[item._id] = item.count;
+    intervalGroups.forEach((item) => {
+      const standardKey = fromPrismaInterval(item.interval);
+      if (standardKey && intervalBreakdown.hasOwnProperty(standardKey)) {
+        intervalBreakdown[standardKey] = item._count._all;
       }
     });
 
@@ -72,7 +174,7 @@ export const adminGetMonitorStats = async (req, res) => {
           pending: pendingMonitors,
         },
         intervalBreakdown,
-        totalUsersWithMonitors: distinctUserIds.length,
+        totalUsersWithMonitors: distinctUsers.length,
         totalChecksRecorded: totalResultRecords,
       },
     });
@@ -101,6 +203,7 @@ export const adminGetAllMonitors = async (req, res) => {
       status,
       userId,
       interval,
+      runnerId,
       search,
       page = 1,
       limit = 20,
@@ -112,49 +215,69 @@ export const adminGetAllMonitors = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
-    const query = {};
+    const where = {};
 
     if (status && ALLOWED_STATUSES.has(status)) {
-      query.status = status;
+      where.status = status;
     }
 
     if (userId) {
-      if (!Types.ObjectId.isValid(userId)) {
+      const parsedUserId = parseInt(userId, 10);
+      if (Number.isNaN(parsedUserId)) {
         return res.status(400).json({
           success: false,
           error: "Invalid userId format",
         });
       }
-      query.userId = new Types.ObjectId(userId);
+      where.userId = parsedUserId;
     }
 
     if (interval && ALLOWED_INTERVALS.has(interval)) {
-      query.interval = interval;
+      where.interval = toPrismaInterval(interval);
+    }
+
+    if (runnerId !== undefined && runnerId !== "") {
+      if (runnerId === "default" || runnerId === "null") {
+        where.runnerId = null;
+      } else {
+        const parsedRunnerId = parseInt(runnerId, 10);
+        if (!Number.isNaN(parsedRunnerId)) {
+          where.runnerId = parsedRunnerId;
+        }
+      }
     }
 
     if (search && typeof search === "string" && search.trim()) {
-      query.url = { $regex: search.trim(), $options: "i" };
+      where.url = { contains: search.trim(), mode: "insensitive" };
     }
 
-    const sortOrder = order.toLowerCase() === "asc" ? 1 : -1;
-    const allowedSortFields = ["createdAt", "updatedAt", "lastCheckedAt", "url", "status", "interval"];
+    const sortOrder = order.toLowerCase() === "asc" ? "asc" : "desc";
+    const allowedSortFields = ["createdAt", "updatedAt", "lastCheckedAt", "url", "status", "interval", "runnerId"];
     const sortField = allowedSortFields.includes(sortBy) ? sortBy : "createdAt";
 
     const [monitors, total] = await Promise.all([
-      UptimeMonitor.find(query)
-        .populate("userId", "_id name email role deleted picture")
-        .sort({ [sortField]: sortOrder })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      UptimeMonitor.countDocuments(query),
+      prisma.uptimeMonitor.findMany({
+        where,
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, role: true, deleted: true, picture: true },
+          },
+          runner: {
+            select: { id: true, name: true, type: true, isActive: true, isDefault: true },
+          },
+        },
+        orderBy: { [sortField]: sortOrder },
+        skip,
+        take: limitNum,
+      }),
+      prisma.uptimeMonitor.count({ where }),
     ]);
 
     const totalPages = Math.ceil(total / limitNum);
 
     return res.status(200).json({
       success: true,
-      data: monitors,
+      data: monitors.map(formatAdminMonitor),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -180,40 +303,56 @@ export const adminGetAllMonitors = async (req, res) => {
  */
 export const adminGetMonitorDetails = async (req, res) => {
   try {
-    const { id } = req.params;
+    const monitorId = parseInt(req.params.id, 10);
 
-    if (!id || !Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid monitor ID format",
-      });
+    if (Number.isNaN(monitorId)) {
+      return res.status(400).json({ success: false, error: "Invalid monitor ID format" });
     }
 
-    const monitor = await UptimeMonitor.findById(id)
-      .populate("userId", "_id name email role deleted picture")
-      .lean();
+    const pageNum = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 30));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [monitor, totalChecksCount] = await Promise.all([
+      prisma.uptimeMonitor.findUnique({
+        where: { id: monitorId },
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, role: true, deleted: true, picture: true },
+          },
+        },
+      }),
+      prisma.uptimeResult.count({ where: { monitorId } }),
+    ]);
 
     if (!monitor) {
-      return res.status(404).json({
-        success: false,
-        error: "Monitor not found",
-      });
+      return res.status(404).json({ success: false, error: "Monitor not found" });
     }
 
-    const [recentResults, totalChecksCount] = await Promise.all([
-      UptimeResult.find({ monitorId: id })
-        .sort({ checkedAt: -1 })
-        .limit(30)
-        .lean(),
-      UptimeResult.countDocuments({ monitorId: id }),
-    ]);
+    const recentResults = await prisma.uptimeResult.findMany({
+      where: { monitorId },
+      orderBy: { checkedAt: "desc" },
+      skip,
+      take: limitNum,
+      select: { id: true, monitorId: true, userId: true, result: true, checkedAt: true },
+    });
+
+    const totalPages = Math.ceil(totalChecksCount / limitNum);
 
     return res.status(200).json({
       success: true,
       data: {
-        monitor,
-        recentResults,
+        monitor: formatAdminMonitor(monitor),
+        recentResults: recentResults.map(formatResult),
         totalChecksCount,
+      },
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalChecksCount,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
       },
     });
   } catch (error) {
@@ -232,15 +371,18 @@ export const adminGetMonitorDetails = async (req, res) => {
 export const adminPauseMonitor = async (req, res) => {
   try {
     const { id } = req.params;
+    const monitorId = parseInt(id, 10);
 
-    if (!id || !Types.ObjectId.isValid(id)) {
+    if (Number.isNaN(monitorId)) {
       return res.status(400).json({
         success: false,
         error: "Invalid monitor ID format",
       });
     }
 
-    const monitor = await UptimeMonitor.findById(id);
+    const monitor = await prisma.uptimeMonitor.findUnique({
+      where: { id: monitorId },
+    });
 
     if (!monitor) {
       return res.status(404).json({
@@ -253,26 +395,28 @@ export const adminPauseMonitor = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: "Monitor is already paused",
-        monitor,
+        monitor: formatAdminMonitor(monitor),
       });
     }
 
     const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
 
     try {
-      await removeUptimeScheduler(monitor._id, ownerRoomId);
+      await removeUptimeScheduler(monitor.id, ownerRoomId);
     } catch (schedErr) {
       console.warn(`[adminPauseMonitor] Scheduler removal warning for ${id}:`, schedErr.message);
     }
 
-    monitor.status = "paused";
-    await monitor.save();
+    const updated = await prisma.uptimeMonitor.update({
+      where: { id: monitorId },
+      data: { status: "paused" },
+    });
 
     // Notify the monitor owner via socket if online
     const io = req.app.get("io");
     if (io && ownerRoomId) {
       io.to(ownerRoomId).emit("monitor:statusChange", {
-        monitorId: monitor._id.toString(),
+        monitorId: monitor.id.toString(),
         status: "paused",
         action: "paused_by_admin",
         changedAt: new Date(),
@@ -282,7 +426,7 @@ export const adminPauseMonitor = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Monitor paused by admin successfully",
-      monitor,
+      monitor: formatAdminMonitor(updated),
     });
   } catch (error) {
     console.error("[adminPauseMonitor] Error:", error);
@@ -301,15 +445,18 @@ export const adminPauseMonitor = async (req, res) => {
 export const adminResumeMonitor = async (req, res) => {
   try {
     const { id } = req.params;
+    const monitorId = parseInt(id, 10);
 
-    if (!id || !Types.ObjectId.isValid(id)) {
+    if (Number.isNaN(monitorId)) {
       return res.status(400).json({
         success: false,
         error: "Invalid monitor ID format",
       });
     }
 
-    const monitor = await UptimeMonitor.findById(id);
+    const monitor = await prisma.uptimeMonitor.findUnique({
+      where: { id: monitorId },
+    });
 
     if (!monitor) {
       return res.status(404).json({
@@ -320,7 +467,10 @@ export const adminResumeMonitor = async (req, res) => {
 
     // Verify owner account is active
     if (monitor.userId) {
-      const owner = await User.findById(monitor.userId);
+      const owner = await prisma.user.findUnique({
+        where: { id: monitor.userId },
+        select: { id: true, deleted: true },
+      });
       if (!owner || owner.deleted) {
         return res.status(400).json({
           success: false,
@@ -333,22 +483,27 @@ export const adminResumeMonitor = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: "Monitor is already active",
-        monitor,
+        monitor: formatAdminMonitor(monitor),
       });
     }
 
     const previousStatus = monitor.status;
-    monitor.status = "active";
-    await monitor.save();
+    const updated = await prisma.uptimeMonitor.update({
+      where: { id: monitorId },
+      data: { status: "active" },
+    });
 
     const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
+    const formattedUpdated = formatAdminMonitor(updated);
 
     try {
-      await createUptimeScheduler(monitor, ownerRoomId);
+      await createUptimeScheduler(formattedUpdated, ownerRoomId);
     } catch (schedErr) {
       console.error(`[adminResumeMonitor] Scheduler creation failed for ${id}:`, schedErr);
-      monitor.status = previousStatus;
-      await monitor.save();
+      await prisma.uptimeMonitor.update({
+        where: { id: monitorId },
+        data: { status: previousStatus },
+      }).catch(() => {});
 
       return res.status(500).json({
         success: false,
@@ -360,7 +515,7 @@ export const adminResumeMonitor = async (req, res) => {
     const io = req.app.get("io");
     if (io && ownerRoomId) {
       io.to(ownerRoomId).emit("monitor:statusChange", {
-        monitorId: monitor._id.toString(),
+        monitorId: monitor.id.toString(),
         status: "active",
         action: "activated_by_admin",
         changedAt: new Date(),
@@ -370,7 +525,7 @@ export const adminResumeMonitor = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Monitor activated successfully by admin",
-      monitor,
+      monitor: formattedUpdated,
     });
   } catch (error) {
     console.error("[adminResumeMonitor] Error:", error);
@@ -394,15 +549,18 @@ export const adminActivateMonitor = adminResumeMonitor;
 export const adminDeleteMonitor = async (req, res) => {
   try {
     const { id } = req.params;
+    const monitorId = parseInt(id, 10);
 
-    if (!id || !Types.ObjectId.isValid(id)) {
+    if (Number.isNaN(monitorId)) {
       return res.status(400).json({
         success: false,
         error: "Invalid monitor ID format",
       });
     }
 
-    const monitor = await UptimeMonitor.findById(id);
+    const monitor = await prisma.uptimeMonitor.findUnique({
+      where: { id: monitorId },
+    });
 
     if (!monitor) {
       return res.status(404).json({
@@ -413,20 +571,17 @@ export const adminDeleteMonitor = async (req, res) => {
 
     const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
 
-    // Remove background scheduler job
     try {
-      await removeUptimeScheduler(monitor._id, ownerRoomId);
+      await removeUptimeScheduler(monitor.id, ownerRoomId);
     } catch (schedErr) {
       console.warn(`[adminDeleteMonitor] Scheduler removal warning for ${id}:`, schedErr.message);
     }
 
-    // Delete monitor document and related results
-    await Promise.all([
-      monitor.deleteOne(),
-      UptimeResult.deleteMany({ monitorId: monitor._id }),
+    await prisma.$transaction([
+      prisma.uptimeResult.deleteMany({ where: { monitorId } }),
+      prisma.uptimeMonitor.delete({ where: { id: monitorId } }),
     ]);
 
-    // Notify monitor owner via socket
     const io = req.app.get("io");
     if (io && ownerRoomId) {
       io.to(ownerRoomId).emit("monitor:deleted", {
@@ -460,22 +615,23 @@ export const adminDeleteActiveMonitors = async (req, res) => {
     const { monitorIds, userId } = req.body || {};
     const queryUserId = req.query.userId || userId;
 
-    const query = { status: "active" };
+    const where = { status: "active" };
 
     if (queryUserId) {
-      if (!Types.ObjectId.isValid(queryUserId)) {
+      const parsedUserId = parseInt(queryUserId, 10);
+      if (Number.isNaN(parsedUserId)) {
         return res.status(400).json({
           success: false,
           error: "Invalid userId format",
         });
       }
-      query.userId = new Types.ObjectId(queryUserId);
+      where.userId = parsedUserId;
     }
 
     if (Array.isArray(monitorIds) && monitorIds.length > 0) {
       const validIds = monitorIds
-        .filter((id) => Types.ObjectId.isValid(id))
-        .map((id) => new Types.ObjectId(id));
+        .map((id) => parseInt(id, 10))
+        .filter((id) => !Number.isNaN(id));
 
       if (validIds.length === 0) {
         return res.status(400).json({
@@ -483,10 +639,10 @@ export const adminDeleteActiveMonitors = async (req, res) => {
           error: "No valid monitor IDs provided in monitorIds array",
         });
       }
-      query._id = { $in: validIds };
+      where.id = { in: validIds };
     }
 
-    const activeMonitors = await UptimeMonitor.find(query);
+    const activeMonitors = await prisma.uptimeMonitor.findMany({ where });
 
     if (!activeMonitors || activeMonitors.length === 0) {
       return res.status(200).json({
@@ -504,21 +660,21 @@ export const adminDeleteActiveMonitors = async (req, res) => {
       const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
 
       try {
-        await removeUptimeScheduler(monitor._id, ownerRoomId);
+        await removeUptimeScheduler(monitor.id, ownerRoomId);
       } catch (schedErr) {
-        console.warn(`[adminDeleteActiveMonitors] Failed to remove scheduler for ${monitor._id}:`, schedErr.message);
+        console.warn(`[adminDeleteActiveMonitors] Failed to remove scheduler for ${monitor.id}:`, schedErr.message);
       }
 
-      await Promise.all([
-        monitor.deleteOne(),
-        UptimeResult.deleteMany({ monitorId: monitor._id }),
+      await prisma.$transaction([
+        prisma.uptimeResult.deleteMany({ where: { monitorId: monitor.id } }),
+        prisma.uptimeMonitor.delete({ where: { id: monitor.id } }),
       ]);
 
-      deletedIds.push(monitor._id.toString());
+      deletedIds.push(monitor.id.toString());
 
       if (io && ownerRoomId) {
         io.to(ownerRoomId).emit("monitor:deleted", {
-          monitorId: monitor._id.toString(),
+          monitorId: monitor.id.toString(),
           deletedBy: "admin",
           deletedAt: new Date(),
         });
@@ -548,23 +704,24 @@ export const adminBulkPauseMonitors = async (req, res) => {
   try {
     const { monitorIds, userId } = req.body || {};
 
-    const query = { status: "active" };
+    const where = { status: "active" };
 
     if (userId) {
-      if (!Types.ObjectId.isValid(userId)) {
+      const parsedUserId = parseInt(userId, 10);
+      if (Number.isNaN(parsedUserId)) {
         return res.status(400).json({ success: false, error: "Invalid userId format" });
       }
-      query.userId = new Types.ObjectId(userId);
+      where.userId = parsedUserId;
     }
 
     if (Array.isArray(monitorIds) && monitorIds.length > 0) {
       const validIds = monitorIds
-        .filter((id) => Types.ObjectId.isValid(id))
-        .map((id) => new Types.ObjectId(id));
-      query._id = { $in: validIds };
+        .map((id) => parseInt(id, 10))
+        .filter((id) => !Number.isNaN(id));
+      where.id = { in: validIds };
     }
 
-    const monitorsToPause = await UptimeMonitor.find(query);
+    const monitorsToPause = await prisma.uptimeMonitor.findMany({ where });
 
     if (monitorsToPause.length === 0) {
       return res.status(200).json({
@@ -581,18 +738,20 @@ export const adminBulkPauseMonitors = async (req, res) => {
     for (const monitor of monitorsToPause) {
       const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
       try {
-        await removeUptimeScheduler(monitor._id, ownerRoomId);
+        await removeUptimeScheduler(monitor.id, ownerRoomId);
       } catch (err) {
-        console.warn(`[adminBulkPauseMonitors] Failed to remove scheduler for ${monitor._id}:`, err.message);
+        console.warn(`[adminBulkPauseMonitors] Failed to remove scheduler for ${monitor.id}:`, err.message);
       }
 
-      monitor.status = "paused";
-      await monitor.save();
-      pausedIds.push(monitor._id.toString());
+      await prisma.uptimeMonitor.update({
+        where: { id: monitor.id },
+        data: { status: "paused" },
+      });
+      pausedIds.push(monitor.id.toString());
 
       if (io && ownerRoomId) {
         io.to(ownerRoomId).emit("monitor:statusChange", {
-          monitorId: monitor._id.toString(),
+          monitorId: monitor.id.toString(),
           status: "paused",
           action: "bulk_paused_by_admin",
           changedAt: new Date(),
@@ -623,23 +782,24 @@ export const adminBulkResumeMonitors = async (req, res) => {
   try {
     const { monitorIds, userId } = req.body || {};
 
-    const query = { status: "paused" };
+    const where = { status: "paused" };
 
     if (userId) {
-      if (!Types.ObjectId.isValid(userId)) {
+      const parsedUserId = parseInt(userId, 10);
+      if (Number.isNaN(parsedUserId)) {
         return res.status(400).json({ success: false, error: "Invalid userId format" });
       }
-      query.userId = new Types.ObjectId(userId);
+      where.userId = parsedUserId;
     }
 
     if (Array.isArray(monitorIds) && monitorIds.length > 0) {
       const validIds = monitorIds
-        .filter((id) => Types.ObjectId.isValid(id))
-        .map((id) => new Types.ObjectId(id));
-      query._id = { $in: validIds };
+        .map((id) => parseInt(id, 10))
+        .filter((id) => !Number.isNaN(id));
+      where.id = { in: validIds };
     }
 
-    const monitorsToResume = await UptimeMonitor.find(query);
+    const monitorsToResume = await prisma.uptimeMonitor.findMany({ where });
 
     if (monitorsToResume.length === 0) {
       return res.status(200).json({
@@ -656,26 +816,32 @@ export const adminBulkResumeMonitors = async (req, res) => {
 
     for (const monitor of monitorsToResume) {
       const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
-      monitor.status = "active";
-      await monitor.save();
+      await prisma.uptimeMonitor.update({
+        where: { id: monitor.id },
+        data: { status: "active" },
+      });
+
+      const formatted = formatAdminMonitor({ ...monitor, status: "active" });
 
       try {
-        await createUptimeScheduler(monitor, ownerRoomId);
-        resumedIds.push(monitor._id.toString());
+        await createUptimeScheduler(formatted, ownerRoomId);
+        resumedIds.push(monitor.id.toString());
 
         if (io && ownerRoomId) {
           io.to(ownerRoomId).emit("monitor:statusChange", {
-            monitorId: monitor._id.toString(),
+            monitorId: monitor.id.toString(),
             status: "active",
             action: "bulk_activated_by_admin",
             changedAt: new Date(),
           });
         }
       } catch (err) {
-        console.error(`[adminBulkResumeMonitors] Failed to start scheduler for ${monitor._id}:`, err);
-        monitor.status = "paused";
-        await monitor.save();
-        failedIds.push(monitor._id.toString());
+        console.error(`[adminBulkResumeMonitors] Failed to start scheduler for ${monitor.id}:`, err);
+        await prisma.uptimeMonitor.update({
+          where: { id: monitor.id },
+          data: { status: "paused" },
+        }).catch(() => {});
+        failedIds.push(monitor.id.toString());
       }
     }
 
@@ -704,15 +870,18 @@ export const adminBulkResumeMonitors = async (req, res) => {
 export const adminTriggerMonitorCheck = async (req, res) => {
   try {
     const { id } = req.params;
+    const monitorId = parseInt(id, 10);
 
-    if (!id || !Types.ObjectId.isValid(id)) {
+    if (Number.isNaN(monitorId)) {
       return res.status(400).json({
         success: false,
         error: "Invalid monitor ID format",
       });
     }
 
-    const monitor = await UptimeMonitor.findById(id);
+    const monitor = await prisma.uptimeMonitor.findUnique({
+      where: { id: monitorId },
+    });
     if (!monitor) {
       return res.status(404).json({
         success: false,
@@ -739,22 +908,21 @@ export const adminTriggerMonitorCheck = async (req, res) => {
 
     // Persist result and update monitor
     const [savedResult] = await Promise.all([
-      UptimeResult.create({
-        monitorId: monitor._id,
-        userId: monitor.userId,
-        result,
-        checkedAt,
-      }),
-      UptimeMonitor.findByIdAndUpdate(
-        monitor._id,
-        {
-          $set: {
-            lastResult: result,
-            lastCheckedAt: checkedAt,
-          },
+      prisma.uptimeResult.create({
+        data: {
+          monitorId: monitor.id,
+          userId: monitor.userId,
+          result,
+          checkedAt,
         },
-        { returnDocument: "after" }
-      ),
+      }),
+      prisma.uptimeMonitor.update({
+        where: { id: monitor.id },
+        data: {
+          lastResult: result,
+          lastCheckedAt: checkedAt,
+        },
+      }),
     ]);
 
     const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
@@ -763,7 +931,7 @@ export const adminTriggerMonitorCheck = async (req, res) => {
     const payload = {
       jobId: `manual-admin-${Date.now()}`,
       roomId: ownerRoomId,
-      monitorId: monitor._id.toString(),
+      monitorId: monitor.id.toString(),
       url: monitor.url,
       result,
       status: isUp ? "up" : "down",
@@ -779,11 +947,11 @@ export const adminTriggerMonitorCheck = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Ad-hoc monitor check executed successfully",
-      monitorId: monitor._id.toString(),
+      monitorId: monitor.id.toString(),
       result,
       status: isUp ? "UP" : "DOWN",
       checkedAt,
-      resultRecordId: savedResult._id,
+      resultRecordId: savedResult.id.toString(),
     });
   } catch (error) {
     console.error("[adminTriggerMonitorCheck] Error:", error);
@@ -801,7 +969,7 @@ export const adminTriggerMonitorCheck = async (req, res) => {
  */
 export const adminCreateMonitor = async (req, res) => {
   try {
-    const { url, interval = "5m", userId } = req.body || {};
+    const { url, interval = "5m", userId, runnerId } = req.body || {};
 
     if (!url || typeof url !== "string") {
       return res.status(400).json({ success: false, error: "Target URL is required" });
@@ -816,25 +984,52 @@ export const adminCreateMonitor = async (req, res) => {
     if (!ALLOWED_INTERVALS.has(interval)) {
       return res.status(400).json({
         success: false,
-        error: `Invalid interval. Allowed values are: ${[...ALLOWED_INTERVALS].join(", ")}`,
+        error: `Invalid interval. Allowed values are: 1m, 5m, 15m, 30m, 1h`,
       });
     }
 
-    const targetUserId = userId || req.user._id;
+    const rawTargetUserId = userId || req.user._id || req.user.id;
+    const targetUserId = parseInt(rawTargetUserId, 10);
 
-    if (!Types.ObjectId.isValid(targetUserId)) {
+    if (Number.isNaN(targetUserId)) {
       return res.status(400).json({ success: false, error: "Invalid userId format" });
     }
 
-    const targetUser = await User.findById(targetUserId);
+    const targetUser = await prisma.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true, deleted: true },
+    });
     if (!targetUser || targetUser.deleted) {
       return res.status(404).json({ success: false, error: "Target user account not found or deleted" });
     }
 
+    let assignedRunnerId = null;
+    if (runnerId !== undefined && runnerId !== null && runnerId !== "" && runnerId !== "default") {
+      const parsedRunnerId = parseInt(runnerId, 10);
+      if (Number.isNaN(parsedRunnerId)) {
+        return res.status(400).json({ success: false, error: "Invalid runnerId format" });
+      }
+      const runner = await prisma.uptimeRunner.findUnique({ where: { id: parsedRunnerId } });
+      if (!runner) {
+        return res.status(404).json({ success: false, error: `Runner #${parsedRunnerId} not found` });
+      }
+      if (!runner.isActive) {
+        return res.status(400).json({
+          success: false,
+          error: `Runner '${runner.name}' is disabled and cannot be assigned`,
+        });
+      }
+      assignedRunnerId = parsedRunnerId;
+    }
+
     // Check duplicate
-    const existing = await UptimeMonitor.findOne({
-      userId: targetUserId,
-      url: url.trim(),
+    const existing = await prisma.uptimeMonitor.findUnique({
+      where: {
+        userId_url: {
+          userId: targetUserId,
+          url: url.trim(),
+        },
+      },
     });
 
     if (existing) {
@@ -844,19 +1039,28 @@ export const adminCreateMonitor = async (req, res) => {
       });
     }
 
-    const monitor = await UptimeMonitor.create({
-      url: url.trim(),
-      interval,
-      status: "active",
-      userId: targetUserId,
+    const monitor = await prisma.uptimeMonitor.create({
+      data: {
+        url: url.trim(),
+        interval: toPrismaInterval(interval),
+        status: "active",
+        userId: targetUserId,
+        runnerId: assignedRunnerId,
+      },
+      include: {
+        runner: {
+          select: { id: true, name: true, type: true, isActive: true, isDefault: true },
+        },
+      },
     });
 
     const ownerRoomId = `user:${targetUserId}`;
+    const formatted = formatAdminMonitor(monitor);
 
     try {
-      await createUptimeScheduler(monitor, ownerRoomId);
+      await createUptimeScheduler(formatted, ownerRoomId);
     } catch (schedErr) {
-      await UptimeMonitor.findByIdAndDelete(monitor._id);
+      await prisma.uptimeMonitor.delete({ where: { id: monitor.id } }).catch(() => {});
       console.error("[adminCreateMonitor] Scheduler initialization failed:", schedErr);
       return res.status(500).json({
         success: false,
@@ -867,9 +1071,9 @@ export const adminCreateMonitor = async (req, res) => {
     const io = req.app.get("io");
     if (io && ownerRoomId) {
       io.to(ownerRoomId).emit("monitor:created", {
-        monitorId: monitor._id.toString(),
+        monitorId: monitor.id.toString(),
         url: monitor.url,
-        interval: monitor.interval,
+        interval: fromPrismaInterval(monitor.interval),
         status: monitor.status,
         createdBy: "admin",
       });
@@ -878,7 +1082,7 @@ export const adminCreateMonitor = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Monitor created successfully by admin",
-      monitor,
+      monitor: formatted,
     });
   } catch (error) {
     console.error("[adminCreateMonitor] Error:", error);
@@ -897,13 +1101,16 @@ export const adminCreateMonitor = async (req, res) => {
 export const adminUpdateMonitor = async (req, res) => {
   try {
     const { id } = req.params;
-    const { url, interval, status } = req.body || {};
+    const { url, interval, status, runnerId } = req.body || {};
+    const monitorId = parseInt(id, 10);
 
-    if (!id || !Types.ObjectId.isValid(id)) {
+    if (Number.isNaN(monitorId)) {
       return res.status(400).json({ success: false, error: "Invalid monitor ID format" });
     }
 
-    const monitor = await UptimeMonitor.findById(id);
+    const monitor = await prisma.uptimeMonitor.findUnique({
+      where: { id: monitorId },
+    });
     if (!monitor) {
       return res.status(404).json({ success: false, error: "Monitor not found" });
     }
@@ -923,10 +1130,10 @@ export const adminUpdateMonitor = async (req, res) => {
       if (!ALLOWED_INTERVALS.has(interval)) {
         return res.status(400).json({
           success: false,
-          error: `Invalid interval. Allowed values are: ${[...ALLOWED_INTERVALS].join(", ")}`,
+          error: `Invalid interval. Allowed values are: 1m, 5m, 15m, 30m, 1h`,
         });
       }
-      updates.interval = interval;
+      updates.interval = toPrismaInterval(interval);
     }
 
     if (status !== undefined) {
@@ -936,6 +1143,28 @@ export const adminUpdateMonitor = async (req, res) => {
       updates.status = status;
     }
 
+    if (runnerId !== undefined) {
+      if (runnerId === null || runnerId === "" || runnerId === "default") {
+        updates.runnerId = null;
+      } else {
+        const parsedRunnerId = parseInt(runnerId, 10);
+        if (Number.isNaN(parsedRunnerId)) {
+          return res.status(400).json({ success: false, error: "Invalid runnerId format" });
+        }
+        const runner = await prisma.uptimeRunner.findUnique({ where: { id: parsedRunnerId } });
+        if (!runner) {
+          return res.status(404).json({ success: false, error: `Runner #${parsedRunnerId} not found` });
+        }
+        if (!runner.isActive) {
+          return res.status(400).json({
+            success: false,
+            error: `Runner '${runner.name}' is disabled and cannot be assigned`,
+          });
+        }
+        updates.runnerId = parsedRunnerId;
+      }
+    }
+
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ success: false, error: "No fields to update provided" });
     }
@@ -943,18 +1172,21 @@ export const adminUpdateMonitor = async (req, res) => {
     const prevStatus = monitor.status;
     const prevInterval = monitor.interval;
 
-    Object.assign(monitor, updates);
-    await monitor.save();
+    const updated = await prisma.uptimeMonitor.update({
+      where: { id: monitorId },
+      data: updates,
+    });
 
     const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
+    const formatted = formatAdminMonitor(updated);
 
     try {
-      if (monitor.status === "active") {
-        if (prevStatus === "paused" || prevInterval !== monitor.interval) {
-          await updateUptimeScheduler(monitor, ownerRoomId);
+      if (updated.status === "active") {
+        if (prevStatus === "paused" || prevInterval !== updated.interval) {
+          await updateUptimeScheduler(formatted, ownerRoomId);
         }
-      } else if (monitor.status === "paused") {
-        await removeUptimeScheduler(monitor._id, ownerRoomId);
+      } else if (updated.status === "paused") {
+        await removeUptimeScheduler(updated.id, ownerRoomId);
       }
     } catch (schedErr) {
       console.warn(`[adminUpdateMonitor] Scheduler sync warning for ${id}:`, schedErr.message);
@@ -963,10 +1195,10 @@ export const adminUpdateMonitor = async (req, res) => {
     const io = req.app.get("io");
     if (io && ownerRoomId) {
       io.to(ownerRoomId).emit("monitor:statusChange", {
-        monitorId: monitor._id.toString(),
-        status: monitor.status,
-        url: monitor.url,
-        interval: monitor.interval,
+        monitorId: updated.id.toString(),
+        status: updated.status,
+        url: updated.url,
+        interval: fromPrismaInterval(updated.interval),
         action: "updated_by_admin",
         changedAt: new Date(),
       });
@@ -975,7 +1207,7 @@ export const adminUpdateMonitor = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Monitor updated successfully by admin",
-      monitor,
+      monitor: formatted,
     });
   } catch (error) {
     console.error("[adminUpdateMonitor] Error:", error);
@@ -997,34 +1229,35 @@ export const adminBulkDeleteMonitors = async (req, res) => {
     const { monitorIds, userId } = req.body || {};
     const queryUserId = req.query.userId || userId;
 
-    const query = {};
+    const where = {};
 
     if (queryUserId) {
-      if (!Types.ObjectId.isValid(queryUserId)) {
+      const parsedUserId = parseInt(queryUserId, 10);
+      if (Number.isNaN(parsedUserId)) {
         return res.status(400).json({ success: false, error: "Invalid userId format" });
       }
-      query.userId = new Types.ObjectId(queryUserId);
+      where.userId = parsedUserId;
     }
 
     if (Array.isArray(monitorIds) && monitorIds.length > 0) {
       const validIds = monitorIds
-        .filter((id) => Types.ObjectId.isValid(id))
-        .map((id) => new Types.ObjectId(id));
+        .map((id) => parseInt(id, 10))
+        .filter((id) => !Number.isNaN(id));
 
       if (validIds.length === 0) {
         return res.status(400).json({ success: false, error: "No valid monitor IDs provided in monitorIds array" });
       }
-      query._id = { $in: validIds };
+      where.id = { in: validIds };
     }
 
-    if (Object.keys(query).length === 0) {
+    if (Object.keys(where).length === 0) {
       return res.status(400).json({
         success: false,
         error: "Either monitorIds array or userId must be provided for bulk deletion",
       });
     }
 
-    const targets = await UptimeMonitor.find(query);
+    const targets = await prisma.uptimeMonitor.findMany({ where });
     if (!targets || targets.length === 0) {
       return res.status(200).json({
         success: true,
@@ -1041,21 +1274,21 @@ export const adminBulkDeleteMonitors = async (req, res) => {
       const ownerRoomId = monitor.userId ? `user:${monitor.userId}` : null;
 
       try {
-        await removeUptimeScheduler(monitor._id, ownerRoomId);
+        await removeUptimeScheduler(monitor.id, ownerRoomId);
       } catch (schedErr) {
-        console.warn(`[adminBulkDeleteMonitors] Scheduler removal error for ${monitor._id}:`, schedErr.message);
+        console.warn(`[adminBulkDeleteMonitors] Scheduler removal error for ${monitor.id}:`, schedErr.message);
       }
 
-      await Promise.all([
-        monitor.deleteOne(),
-        UptimeResult.deleteMany({ monitorId: monitor._id }),
+      await prisma.$transaction([
+        prisma.uptimeResult.deleteMany({ where: { monitorId: monitor.id } }),
+        prisma.uptimeMonitor.delete({ where: { id: monitor.id } }),
       ]);
 
-      deletedIds.push(monitor._id.toString());
+      deletedIds.push(monitor.id.toString());
 
       if (io && ownerRoomId) {
         io.to(ownerRoomId).emit("monitor:deleted", {
-          monitorId: monitor._id.toString(),
+          monitorId: monitor.id.toString(),
           deletedBy: "admin",
           deletedAt: new Date(),
         });
@@ -1088,36 +1321,40 @@ export const adminClearMonitorResults = async (req, res) => {
   try {
     const { id } = req.params;
     const olderThanDays = req.body?.olderThanDays ?? req.query?.olderThanDays;
+    const monitorId = parseInt(id, 10);
 
-    if (!id || !Types.ObjectId.isValid(id)) {
+    if (Number.isNaN(monitorId)) {
       return res.status(400).json({ success: false, error: "Invalid monitor ID format" });
     }
 
-    const monitor = await UptimeMonitor.findById(id);
+    const monitor = await prisma.uptimeMonitor.findUnique({
+      where: { id: monitorId },
+    });
     if (!monitor) {
       return res.status(404).json({ success: false, error: "Monitor not found" });
     }
 
-    const deleteFilter = { monitorId: monitor._id };
+    const deleteWhere = { monitorId };
 
     if (olderThanDays !== undefined && olderThanDays !== null && !isNaN(Number(olderThanDays))) {
       const cutoff = new Date(Date.now() - Math.max(0, Number(olderThanDays)) * 86400000);
-      deleteFilter.checkedAt = { $lt: cutoff };
+      deleteWhere.checkedAt = { lt: cutoff };
     }
 
-    const result = await UptimeResult.deleteMany(deleteFilter);
+    const result = await prisma.uptimeResult.deleteMany({ where: deleteWhere });
 
     // If all results cleared, reset monitor lastResult / lastCheckedAt
     if (!olderThanDays) {
-      await UptimeMonitor.findByIdAndUpdate(id, {
-        $set: { lastResult: null, lastCheckedAt: null },
+      await prisma.uptimeMonitor.update({
+        where: { id: monitorId },
+        data: { lastResult: Prisma.DbNull, lastCheckedAt: null },
       });
     }
 
     return res.status(200).json({
       success: true,
-      message: `Successfully purged ${result.deletedCount} check result records`,
-      deletedCount: result.deletedCount,
+      message: `Successfully purged ${result.count} check result records`,
+      deletedCount: result.count,
       monitorId: id,
     });
   } catch (error) {
@@ -1141,34 +1378,35 @@ export const adminBulkUpdateInterval = async (req, res) => {
     if (!interval || !ALLOWED_INTERVALS.has(interval)) {
       return res.status(400).json({
         success: false,
-        error: `Invalid interval. Allowed values are: ${[...ALLOWED_INTERVALS].join(", ")}`,
+        error: `Invalid interval. Allowed values are: 1m, 5m, 15m, 30m, 1h`,
       });
     }
 
-    const query = {};
+    const where = {};
 
     if (userId) {
-      if (!Types.ObjectId.isValid(userId)) {
+      const parsedUserId = parseInt(userId, 10);
+      if (Number.isNaN(parsedUserId)) {
         return res.status(400).json({ success: false, error: "Invalid userId format" });
       }
-      query.userId = new Types.ObjectId(userId);
+      where.userId = parsedUserId;
     }
 
     if (Array.isArray(monitorIds) && monitorIds.length > 0) {
       const validIds = monitorIds
-        .filter((id) => Types.ObjectId.isValid(id))
-        .map((id) => new Types.ObjectId(id));
-      query._id = { $in: validIds };
+        .map((id) => parseInt(id, 10))
+        .filter((id) => !Number.isNaN(id));
+      where.id = { in: validIds };
     }
 
-    if (Object.keys(query).length === 0) {
+    if (Object.keys(where).length === 0) {
       return res.status(400).json({
         success: false,
         error: "Either monitorIds array or userId must be specified",
       });
     }
 
-    const monitors = await UptimeMonitor.find(query);
+    const monitors = await prisma.uptimeMonitor.findMany({ where });
     if (!monitors || monitors.length === 0) {
       return res.status(200).json({
         success: true,
@@ -1180,26 +1418,30 @@ export const adminBulkUpdateInterval = async (req, res) => {
 
     const updatedIds = [];
     const io = req.app.get("io");
+    const prismaInterval = toPrismaInterval(interval);
 
     for (const mon of monitors) {
-      mon.interval = interval;
-      await mon.save();
-      updatedIds.push(mon._id.toString());
+      const updated = await prisma.uptimeMonitor.update({
+        where: { id: mon.id },
+        data: { interval: prismaInterval },
+      });
+      updatedIds.push(mon.id.toString());
 
       const ownerRoomId = mon.userId ? `user:${mon.userId}` : null;
+      const formatted = formatAdminMonitor(updated);
 
       if (mon.status === "active") {
         try {
-          await updateUptimeScheduler(mon, ownerRoomId);
+          await updateUptimeScheduler(formatted, ownerRoomId);
         } catch (err) {
-          console.warn(`[adminBulkUpdateInterval] Scheduler error for ${mon._id}:`, err.message);
+          console.warn(`[adminBulkUpdateInterval] Scheduler error for ${mon.id}:`, err.message);
         }
       }
 
       if (io && ownerRoomId) {
         io.to(ownerRoomId).emit("monitor:statusChange", {
-          monitorId: mon._id.toString(),
-          interval: mon.interval,
+          monitorId: mon.id.toString(),
+          interval: fromPrismaInterval(updated.interval),
           status: mon.status,
           action: "interval_updated_by_admin",
           changedAt: new Date(),
@@ -1230,20 +1472,25 @@ export const adminBulkUpdateInterval = async (req, res) => {
  */
 export const adminGetMonitorIncidents = async (req, res) => {
   try {
-    const incidents = await UptimeMonitor.find({
-      $or: [
-        { "lastResult.status": "DOWN" },
-        { "lastResult.status": "DEGRADED" },
-      ],
-    })
-      .populate("userId", "_id name email role picture")
-      .sort({ lastCheckedAt: -1 })
-      .lean();
+    const incidents = await prisma.uptimeMonitor.findMany({
+      where: {
+        OR: [
+          { lastResult: { path: ["status"], equals: "DOWN" } },
+          { lastResult: { path: ["status"], equals: "DEGRADED" } },
+        ],
+      },
+      include: {
+        user: {
+          select: { id: true, name: true, email: true, role: true, picture: true },
+        },
+      },
+      orderBy: { lastCheckedAt: "desc" },
+    });
 
     return res.status(200).json({
       success: true,
       count: incidents.length,
-      incidents,
+      incidents: incidents.map(formatAdminMonitor),
     });
   } catch (error) {
     console.error("[adminGetMonitorIncidents] Error:", error);
@@ -1261,24 +1508,28 @@ export const adminGetMonitorIncidents = async (req, res) => {
  */
 export const adminExportMonitors = async (req, res) => {
   try {
-    const monitors = await UptimeMonitor.find()
-      .populate("userId", "_id name email role")
-      .sort({ createdAt: -1 })
-      .lean();
+    const monitors = await prisma.uptimeMonitor.findMany({
+      include: {
+        user: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
 
     const formatted = monitors.map((m) => ({
-      id: m._id.toString(),
+      id: m.id.toString(),
       url: m.url,
-      interval: m.interval,
+      interval: fromPrismaInterval(m.interval),
       status: m.status,
       health: m.lastResult?.status || "PENDING",
       responseTimeMs: m.lastResult?.responseTime ?? null,
       httpStatus: m.lastResult?.httpStatus ?? null,
       lastCheckedAt: m.lastCheckedAt ? new Date(m.lastCheckedAt).toISOString() : null,
       createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : null,
-      userEmail: m.userId?.email || "Unknown",
-      userName: m.userId?.name || "Unknown",
-      userRole: m.userId?.role || "User",
+      userEmail: m.user?.email || "Unknown",
+      userName: m.user?.name || "Unknown",
+      userRole: m.user?.role || "User",
     }));
 
     return res.status(200).json({
@@ -1295,4 +1546,835 @@ export const adminExportMonitors = async (req, res) => {
   }
 };
 
+// ==============================================================================
+// UPTIME RUNNER MANAGEMENT (ADMIN / SUPERADMIN RBAC)
+// ==============================================================================
 
+const isPrivateOrInternalIp = (ip) => {
+  const bl = new net.BlockList();
+  [
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+  ].forEach((cidr) => {
+    const [addr, prefix] = cidr.split("/");
+    bl.addSubnet(addr, Number(prefix), "ipv4");
+  });
+  bl.addAddress("::1", "ipv6");
+  bl.addSubnet("fc00::", 7, "ipv6");
+  bl.addSubnet("fe80::", 10, "ipv6");
+  return bl.check(ip, net.isIPv6(ip) ? "ipv6" : "ipv4");
+};
+
+/**
+ * Validates an HTTP runner URL:
+ * - Must be valid URL format
+ * - Must use HTTPS
+ * - Blocks localhost, internal domains, and private/internal IPs (SSRF protection)
+ */
+export const validateHttpRunnerTarget = async (urlString) => {
+  let parsed;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    return { valid: false, error: "Invalid URL format" };
+  }
+
+  if (parsed.protocol !== "https:") {
+    return { valid: false, error: "HTTP runner URL must use HTTPS" };
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    hostname.endsWith(".lan")
+  ) {
+    return { valid: false, error: "Private and internal hostnames are blocked (SSRF protection)" };
+  }
+
+  if (net.isIP(hostname)) {
+    if (isPrivateOrInternalIp(hostname)) {
+      return { valid: false, error: "Private and reserved IP addresses are blocked (SSRF protection)" };
+    }
+  } else {
+    try {
+      const addresses = await dns.resolve(hostname);
+      for (const addr of addresses) {
+        if (isPrivateOrInternalIp(addr)) {
+          return {
+            valid: false,
+            error: `Resolved IP (${addr}) for host '${hostname}' is private/internal (SSRF protection)`,
+          };
+        }
+      }
+    } catch (err) {
+      return { valid: false, error: `Could not resolve hostname '${hostname}': ${err.message}` };
+    }
+  }
+
+  return { valid: true, url: parsed.href };
+};
+
+/**
+ * GET /admin/runners
+ * Fetches all registered uptime runners with monitor count and defaultMonitorCount.
+ * Masked/sanitized configuration so secrets are never returned.
+ */
+export const adminGetRunners = async (req, res) => {
+  try {
+    // Ensure at least one default runner exists in PostgreSQL
+    await ensureDefaultRunner();
+
+    const [runners, defaultMonitorCount] = await Promise.all([
+      prisma.uptimeRunner.findMany({
+        orderBy: { id: "asc" },
+        include: {
+          _count: {
+            select: { monitors: true },
+          },
+        },
+      }),
+      prisma.uptimeMonitor.count({
+        where: { runnerId: null },
+      }),
+    ]);
+
+    // Mask secrets and credentials from config
+    const safeRunners = runners.map((r) => {
+      const { config, _count, ...rest } = r;
+      const rawConfig = config && typeof config === "object" ? config : {};
+      const safeConfig = {
+        batchSize: rawConfig.batchSize || null,
+        ...(r.type === "lambda"
+          ? {
+              region: rawConfig.region || null,
+              functionName: rawConfig.functionName || null,
+            }
+          : {}),
+        ...(r.type === "http"
+          ? {
+              url: rawConfig.url ? rawConfig.url.replace(/:[^:@]+@/, ":***@") : null,
+              secretEnv: rawConfig.secretEnv ? "***" : undefined,
+            }
+          : {}),
+      };
+
+      return {
+        ...rest,
+        config: safeConfig,
+        monitorCount: _count?.monitors || 0,
+        _count: { monitors: _count?.monitors || 0 },
+        totalMonitors: (_count?.monitors || 0) + (r.isDefault ? defaultMonitorCount : 0),
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      runners: safeRunners,
+      defaultMonitorCount,
+    });
+  } catch (error) {
+    console.error("[adminGetRunners] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch runners",
+    });
+  }
+};
+
+/**
+ * POST /admin/runners
+ * Registers a new uptime runner (created with isActive: true by default).
+ */
+export const adminCreateRunner = async (req, res) => {
+  try {
+    const { name, type, config } = req.body || {};
+
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ success: false, error: "Runner name is required" });
+    }
+
+    const trimmedName = name.trim();
+    const validTypes = new Set(["local", "lambda", "http"]);
+    if (!validTypes.has(type)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid runner type. Allowed types are: local, lambda, http",
+      });
+    }
+
+    const cleanConfig = config && typeof config === "object" ? { ...config } : {};
+
+    // Secrets policy: Secrets must live in environment variables only, not in DB config JSON
+    if (cleanConfig.secret || cleanConfig.secretAccessKey || cleanConfig.accessKeyId) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Security violation: Raw credentials and secrets must live in environment variables only (e.g. AWS_UPTIME_KEY_ID or RUNNER_SECRET), not in database config JSON.",
+      });
+    }
+
+    // Type-specific validations
+    if (type === "lambda") {
+      if (!cleanConfig.functionName || typeof cleanConfig.functionName !== "string" || !cleanConfig.functionName.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "Lambda runner requires 'config.functionName'",
+        });
+      }
+      cleanConfig.functionName = cleanConfig.functionName.trim();
+    } else if (type === "http") {
+      if (!cleanConfig.url || typeof cleanConfig.url !== "string" || !cleanConfig.url.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "HTTP runner requires 'config.url'",
+        });
+      }
+      const validation = await validateHttpRunnerTarget(cleanConfig.url.trim());
+      if (!validation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: validation.error,
+        });
+      }
+      cleanConfig.url = validation.url;
+      cleanConfig.secretEnv = cleanConfig.secretEnv?.trim() || "RUNNER_SECRET";
+    }
+
+    const runner = await prisma.uptimeRunner.create({
+      data: {
+        name: trimmedName,
+        type,
+        config: cleanConfig,
+        isActive: true, // Created active and available for assignment
+        isDefault: false,
+      },
+    });
+
+    clearRunnerCache();
+
+    console.log(`[Admin] Runner '${runner.name}' (${runner.type}) created by ${req.user?.email || "Admin"}`);
+
+    return res.status(201).json({
+      success: true,
+      message: "Runner created successfully",
+      runner: {
+        id: runner.id,
+        name: runner.name,
+        type: runner.type,
+        isActive: runner.isActive,
+        isDefault: runner.isDefault,
+        createdAt: runner.createdAt,
+        updatedAt: runner.updatedAt,
+      },
+    });
+  } catch (error) {
+    if (error.code === "P2002") {
+      return res.status(409).json({
+        success: false,
+        error: "A runner with this name already exists",
+      });
+    }
+    console.error("[adminCreateRunner] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error while creating runner",
+    });
+  }
+};
+
+/**
+ * PUT /admin/runners/:id/default
+ * Sets a runner as the system default in a single atomic transaction.
+ * Changing default instantly moves all unassigned monitors.
+ */
+export const adminSetDefaultRunner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const runnerId = parseInt(id, 10);
+    if (Number.isNaN(runnerId)) {
+      return res.status(400).json({ success: false, error: "Invalid runner ID" });
+    }
+
+    const targetRunner = await prisma.uptimeRunner.findUnique({
+      where: { id: runnerId },
+    });
+    if (!targetRunner) {
+      return res.status(404).json({ success: false, error: "Runner not found" });
+    }
+
+    if (!targetRunner.isActive) {
+      return res.status(400).json({
+        success: false,
+        error: "Cannot set a disabled runner as default. Enable the runner first.",
+      });
+    }
+
+    const currentDefault = await prisma.uptimeRunner.findFirst({
+      where: { isDefault: true },
+    });
+
+    if (currentDefault?.id === runnerId) {
+      return res.status(200).json({
+        success: true,
+        message: `Runner '${targetRunner.name}' is already the default runner.`,
+        runner: targetRunner,
+      });
+    }
+
+    const defaultMonitorCount = await prisma.uptimeMonitor.count({
+      where: { runnerId: null },
+    });
+
+    // In one transaction: unset old default and set the new one
+    const [, updated] = await prisma.$transaction([
+      prisma.uptimeRunner.updateMany({
+        where: { isDefault: true },
+        data: { isDefault: false },
+      }),
+      prisma.uptimeRunner.update({
+        where: { id: runnerId },
+        data: { isDefault: true },
+      }),
+    ]);
+
+    clearRunnerCache();
+
+    const actor = req.user?.email || `User #${req.user?.id || req.user?._id}`;
+    const timestamp = new Date().toISOString();
+    console.log(
+      `[AUDIT] Default runner updated by ${actor} from '${currentDefault?.name || "None"}' to '${updated.name}' at ${timestamp}. ${defaultMonitorCount} unassigned monitor(s) will now route to this runner.`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Runner '${updated.name}' set as system default. Note: Changing the default instantly moves all unassigned monitors to this runner.`,
+      runner: updated,
+      unassignedMonitorsMoved: defaultMonitorCount,
+    });
+  } catch (error) {
+    console.error("[adminSetDefaultRunner] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error while setting default runner",
+    });
+  }
+};
+
+/**
+ * Deprecated alias for adminSetDefaultRunner.
+ */
+export const adminActivateRunner = adminSetDefaultRunner;
+
+/**
+ * PUT /admin/runners/:id/toggle
+ * Enables or disables a runner. Prevents disabling the default runner.
+ */
+export const adminToggleRunner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const runnerId = parseInt(id, 10);
+    if (Number.isNaN(runnerId)) {
+      return res.status(400).json({ success: false, error: "Invalid runner ID" });
+    }
+
+    const runner = await prisma.uptimeRunner.findUnique({
+      where: { id: runnerId },
+    });
+    if (!runner) {
+      return res.status(404).json({ success: false, error: "Runner not found" });
+    }
+
+    const nextIsActive =
+      req.body?.isActive !== undefined ? Boolean(req.body.isActive) : !runner.isActive;
+
+    if (runner.isDefault && !nextIsActive) {
+      return res.status(400).json({
+        success: false,
+        error: "Cannot disable the default runner. Set another enabled runner as default before disabling this one.",
+      });
+    }
+
+    const updated = await prisma.uptimeRunner.update({
+      where: { id: runnerId },
+      data: { isActive: nextIsActive },
+    });
+
+    clearRunnerCache();
+
+    console.log(
+      `[Admin] Runner '${updated.name}' ${nextIsActive ? "enabled" : "disabled"} by ${req.user?.email || "Admin"}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Runner '${updated.name}' ${nextIsActive ? "enabled" : "disabled"} successfully`,
+      runner: updated,
+    });
+  } catch (error) {
+    console.error("[adminToggleRunner] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error while toggling runner status",
+    });
+  }
+};
+
+/**
+ * POST /admin/runners/:id/test
+ * Probes a single known-good URL through the specified runner to verify connectivity.
+ */
+export const adminTestRunner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const runnerId = parseInt(id, 10);
+    if (Number.isNaN(runnerId)) {
+      return res.status(400).json({ success: false, error: "Invalid runner ID" });
+    }
+
+    const runner = await prisma.uptimeRunner.findUnique({
+      where: { id: runnerId },
+    });
+    if (!runner) {
+      return res.status(404).json({ success: false, error: "Runner not found" });
+    }
+
+    const testUrl = req.body?.testUrl || "https://httpbin.org/status/200";
+    const runnerFn = RUNNERS[runner.type];
+    if (!runnerFn) {
+      return res.status(400).json({
+        success: false,
+        error: `Unsupported runner type: ${runner.type}`,
+      });
+    }
+
+    const startTime = performance.now();
+    try {
+      const testResults = await runnerFn(
+        [{ id: 0, url: testUrl }],
+        runner.config
+      );
+      const durationMs = Math.round(performance.now() - startTime);
+
+      const probeResult = testResults?.[0]?.result || {};
+      const ok = probeResult.status === "UP";
+
+      return res.status(200).json({
+        success: true,
+        ok,
+        ms: durationMs,
+        status: probeResult.status || "UNKNOWN",
+        httpStatus: probeResult.httpStatus || null,
+        runner: runner.name,
+        type: runner.type,
+        result: probeResult,
+      });
+    } catch (testErr) {
+      const durationMs = Math.round(performance.now() - startTime);
+      console.warn(
+        `[Admin] Runner test failed for '${runner.name}' (${runner.type}):`,
+        testErr.message
+      );
+      return res.status(200).json({
+        success: true,
+        ok: false,
+        ms: durationMs,
+        status: "DOWN",
+        error: testErr.message,
+        runner: runner.name,
+        type: runner.type,
+      });
+    }
+  } catch (error) {
+    console.error("[adminTestRunner] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error while testing runner",
+    });
+  }
+};
+
+/**
+ * DELETE /admin/runners/:id
+ * Removes a runner from the database. Prevents deletion of the default runner.
+ * Automatically reassigns any associated monitors to NULL (default).
+ */
+export const adminDeleteRunner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const runnerId = parseInt(id, 10);
+    if (Number.isNaN(runnerId)) {
+      return res.status(400).json({ success: false, error: "Invalid runner ID" });
+    }
+
+    const runner = await prisma.uptimeRunner.findUnique({
+      where: { id: runnerId },
+    });
+    if (!runner) {
+      return res.status(404).json({ success: false, error: "Runner not found" });
+    }
+
+    if (runner.isDefault) {
+      return res.status(400).json({
+        success: false,
+        error: "Cannot delete the default runner. Set another runner as default before deleting this one.",
+      });
+    }
+
+    const reassignedCount = await prisma.uptimeMonitor.count({
+      where: { runnerId },
+    });
+
+    await prisma.$transaction([
+      prisma.uptimeMonitor.updateMany({
+        where: { runnerId },
+        data: { runnerId: null },
+      }),
+      prisma.uptimeRunner.delete({
+        where: { id: runnerId },
+      }),
+    ]);
+
+    clearRunnerCache();
+
+    const actor = req.user?.email || `User #${req.user?.id || req.user?._id}`;
+    const timestamp = new Date().toISOString();
+    console.log(
+      `[AUDIT] Runner #${runnerId} ('${runner.name}') deleted by ${actor} at ${timestamp}. Reassigned ${reassignedCount} monitor(s) to system default (NULL).`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Runner '${runner.name}' deleted successfully. Reassigned ${reassignedCount} monitor(s) to system default.`,
+      reassignedCount,
+    });
+  } catch (error) {
+    console.error("[adminDeleteRunner] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error while deleting runner",
+    });
+  }
+};
+
+/**
+ * PATCH /admin/monitors/:id/runner
+ * Assigns a single monitor to a specific runner (or null for default).
+ */
+export const adminAssignMonitorRunner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const monitorId = parseInt(id, 10);
+    if (Number.isNaN(monitorId)) {
+      return res.status(400).json({ success: false, error: "Invalid monitor ID" });
+    }
+
+    const monitor = await prisma.uptimeMonitor.findUnique({
+      where: { id: monitorId },
+    });
+    if (!monitor) {
+      return res.status(404).json({ success: false, error: "Monitor not found" });
+    }
+
+    const { runnerId } = req.body || {};
+    let targetRunnerId = null;
+    let targetRunnerName = "System Default";
+
+    if (
+      runnerId !== null &&
+      runnerId !== undefined &&
+      runnerId !== "default" &&
+      runnerId !== "null"
+    ) {
+      const parsedRunnerId = parseInt(runnerId, 10);
+      if (Number.isNaN(parsedRunnerId)) {
+        return res.status(400).json({ success: false, error: "Invalid runner ID format" });
+      }
+
+      const runner = await prisma.uptimeRunner.findUnique({
+        where: { id: parsedRunnerId },
+      });
+      if (!runner) {
+        return res.status(404).json({ success: false, error: "Target runner not found" });
+      }
+      if (!runner.isActive) {
+        return res.status(400).json({
+          success: false,
+          error: "Cannot assign monitor to a disabled runner. Enable the runner first.",
+        });
+      }
+
+      targetRunnerId = runner.id;
+      targetRunnerName = runner.name;
+    }
+
+    const updated = await prisma.uptimeMonitor.update({
+      where: { id: monitorId },
+      data: { runnerId: targetRunnerId },
+      include: {
+        runner: {
+          select: { id: true, name: true, type: true, isActive: true, isDefault: true },
+        },
+      },
+    });
+
+    const actor = req.user?.email || `User #${req.user?.id || req.user?._id}`;
+    const timestamp = new Date().toISOString();
+    console.log(
+      `[AUDIT] Monitor #${monitor.id} reassigned by ${actor} from runner '${
+        monitor.runnerId ?? "default"
+      }' to '${targetRunnerName}' (ID: ${targetRunnerId ?? "default"}) at ${timestamp}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Monitor runner updated to ${targetRunnerName}`,
+      monitor: formatAdminMonitor(updated),
+    });
+  } catch (error) {
+    console.error("[adminAssignMonitorRunner] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error while assigning runner to monitor",
+    });
+  }
+};
+
+/**
+ * POST /admin/monitors/bulk-runner
+ * Assigns a batch of up to 500 monitors to a specific runner (or null for default).
+ */
+export const adminBulkAssignMonitorRunner = async (req, res) => {
+  try {
+    const { monitorIds, runnerId } = req.body || {};
+
+    if (!Array.isArray(monitorIds) || monitorIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "monitorIds must be a non-empty array of numbers",
+      });
+    }
+
+    if (monitorIds.length > 500) {
+      return res.status(400).json({
+        success: false,
+        error: "Maximum 500 monitors can be assigned per bulk request",
+      });
+    }
+
+    const validIds = monitorIds
+      .map((id) => (typeof id === "number" ? id : parseInt(id, 10)))
+      .filter((id) => Number.isInteger(id));
+
+    if (validIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "No valid numeric monitor IDs provided",
+      });
+    }
+
+    let targetRunnerId = null;
+    let targetRunnerName = "System Default";
+
+    if (
+      runnerId !== null &&
+      runnerId !== undefined &&
+      runnerId !== "default" &&
+      runnerId !== "null"
+    ) {
+      const parsedRunnerId = parseInt(runnerId, 10);
+      if (Number.isNaN(parsedRunnerId)) {
+        return res.status(400).json({ success: false, error: "Invalid runner ID format" });
+      }
+
+      const runner = await prisma.uptimeRunner.findUnique({
+        where: { id: parsedRunnerId },
+      });
+      if (!runner) {
+        return res.status(404).json({ success: false, error: "Target runner not found" });
+      }
+      if (!runner.isActive) {
+        return res.status(400).json({
+          success: false,
+          error: "Cannot assign monitors to a disabled runner. Enable the runner first.",
+        });
+      }
+
+      targetRunnerId = runner.id;
+      targetRunnerName = runner.name;
+    }
+
+    const result = await prisma.uptimeMonitor.updateMany({
+      where: { id: { in: validIds } },
+      data: { runnerId: targetRunnerId },
+    });
+
+    const actor = req.user?.email || `User #${req.user?.id || req.user?._id}`;
+    const timestamp = new Date().toISOString();
+    console.log(
+      `[AUDIT] Bulk reassigned ${result.count} monitor(s) to '${targetRunnerName}' (ID: ${
+        targetRunnerId ?? "default"
+      }) by ${actor} at ${timestamp}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully reassigned ${result.count} monitor(s) to ${targetRunnerName}`,
+      count: result.count,
+      runnerId: targetRunnerId,
+    });
+  } catch (error) {
+    console.error("[adminBulkAssignMonitorRunner] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error during bulk runner assignment",
+    });
+  }
+};
+
+/**
+ * POST /admin/runners/:id/move-monitors
+ * Moves monitors from source runner :id to target runner in bulk.
+ * Supports optional filters: { interval, limit, userId }.
+ * Source :id can be numeric ID or "default".
+ */
+export const adminMoveRunnerMonitors = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { toRunnerId, interval, limit, userId } = req.body || {};
+
+    // 1. Resolve source runner
+    let sourceRunnerId = null;
+    let sourceRunnerName = "System Default";
+
+    if (id !== "default" && id !== "null" && id !== "0") {
+      const parsedSourceId = parseInt(id, 10);
+      if (Number.isNaN(parsedSourceId)) {
+        return res.status(400).json({ success: false, error: "Invalid source runner ID" });
+      }
+
+      const sourceRunner = await prisma.uptimeRunner.findUnique({
+        where: { id: parsedSourceId },
+      });
+      if (!sourceRunner) {
+        return res.status(404).json({ success: false, error: "Source runner not found" });
+      }
+
+      sourceRunnerId = sourceRunner.id;
+      sourceRunnerName = sourceRunner.name;
+    }
+
+    // 2. Resolve target runner
+    let targetRunnerId = null;
+    let targetRunnerName = "System Default";
+
+    if (
+      toRunnerId !== null &&
+      toRunnerId !== undefined &&
+      toRunnerId !== "default" &&
+      toRunnerId !== "null"
+    ) {
+      const parsedTargetId = parseInt(toRunnerId, 10);
+      if (Number.isNaN(parsedTargetId)) {
+        return res.status(400).json({ success: false, error: "Invalid target runner ID" });
+      }
+
+      const targetRunner = await prisma.uptimeRunner.findUnique({
+        where: { id: parsedTargetId },
+      });
+      if (!targetRunner) {
+        return res.status(404).json({ success: false, error: "Target runner not found" });
+      }
+      if (!targetRunner.isActive) {
+        return res.status(400).json({
+          success: false,
+          error: "Target runner is disabled. Enable it before moving monitors.",
+        });
+      }
+
+      targetRunnerId = targetRunner.id;
+      targetRunnerName = targetRunner.name;
+    }
+
+    if (sourceRunnerId === targetRunnerId) {
+      return res.status(400).json({
+        success: false,
+        error: "Source and target runners are identical. Nothing to move.",
+      });
+    }
+
+    // 3. Build where filter for source monitors
+    const where = { runnerId: sourceRunnerId };
+
+    if (interval && ALLOWED_INTERVALS.has(interval)) {
+      where.interval = toPrismaInterval(interval);
+    }
+
+    if (userId) {
+      const parsedUserId = parseInt(userId, 10);
+      if (!Number.isNaN(parsedUserId)) {
+        where.userId = parsedUserId;
+      }
+    }
+
+    let movedCount = 0;
+
+    // Optional limit
+    if (limit) {
+      const limitNum = parseInt(limit, 10);
+      if (!Number.isNaN(limitNum) && limitNum > 0) {
+        const monitorsToMove = await prisma.uptimeMonitor.findMany({
+          where,
+          select: { id: true },
+          take: limitNum,
+        });
+
+        const idsToMove = monitorsToMove.map((m) => m.id);
+        if (idsToMove.length > 0) {
+          const updateResult = await prisma.uptimeMonitor.updateMany({
+            where: { id: { in: idsToMove } },
+            data: { runnerId: targetRunnerId },
+          });
+          movedCount = updateResult.count;
+        }
+      }
+    } else {
+      const updateResult = await prisma.uptimeMonitor.updateMany({
+        where,
+        data: { runnerId: targetRunnerId },
+      });
+      movedCount = updateResult.count;
+    }
+
+    const actor = req.user?.email || `User #${req.user?.id || req.user?._id}`;
+    const timestamp = new Date().toISOString();
+    console.log(
+      `[AUDIT] Moved ${movedCount} monitor(s) from '${sourceRunnerName}' (ID: ${
+        sourceRunnerId ?? "default"
+      }) to '${targetRunnerName}' (ID: ${
+        targetRunnerId ?? "default"
+      }) by ${actor} at ${timestamp}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully moved ${movedCount} monitor(s) from ${sourceRunnerName} to ${targetRunnerName}`,
+      movedCount,
+      fromRunnerId: sourceRunnerId,
+      toRunnerId: targetRunnerId,
+    });
+  } catch (error) {
+    console.error("[adminMoveRunnerMonitors] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error while moving monitors",
+    });
+  }
+};

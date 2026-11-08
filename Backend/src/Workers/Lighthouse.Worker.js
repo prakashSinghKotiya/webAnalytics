@@ -1,11 +1,19 @@
-import { Worker } from "bullmq";
-import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { runPageSpeed } from "../Services/psInsight.Service.js";
-import { Lighthouse } from "../Models/Lighthouse.Model.js";
+import { prisma } from "../config/db.prismaSQL.js";
+import { boss, lighthouseQueueName } from "../queue/Lighthouse.queue.js";
 
-export const startLighthouseWorker = () => {
-  const worker = new Worker(
-    "lighthouse-queue",
+const CONCURRENCY = Number(process.env.LIGHTHOUSE_WORKER_CONCURRENCY) || 4;
+
+export const startLighthouseWorker = async () => {
+  const workerId = await boss.work(
+    lighthouseQueueName,
+    {
+      includeMetadata: true, // gives job.retrycount / job.retrylimit
+      teamSize: CONCURRENCY, // fetch up to N jobs per poll
+      teamConcurrency: CONCURRENCY, // run N jobs concurrently
+      teamRefill: true, // refill slots as soon as a job finishes
+      newJobCheckInterval: 500, // ms
+    },
     async (job) => {
       console.log(`Processing Lighthouse job ${job.id} for:`, job.data);
 
@@ -18,83 +26,112 @@ export const startLighthouseWorker = () => {
         ligthouseId,
         strategy = "mobile",
       } = job.data;
-      const dbId = lighthousedbId || ligthouseId;
-       
 
-      if (!targetUrl || !dbId || (!userId && !guestId) || !roomId) {
+      const rawDbId = lighthousedbId || ligthouseId || job.data?.recordId || job.data?.id;
+      let dbId = null;
+      if (typeof rawDbId === "string") {
+        const match = rawDbId.match(/\d+$/);
+        if (match) dbId = parseInt(match[0], 10);
+      } else if (typeof rawDbId === "number") {
+        dbId = rawDbId;
+      }
+
+      const effectiveUserId = userId != null ? Number(userId) : null;
+      const effectiveGuestId = guestId || null;
+      const effectiveRoomId =
+        roomId ||
+        (effectiveUserId
+          ? `user:${effectiveUserId}`
+          : effectiveGuestId
+          ? `guest:${effectiveGuestId}`
+          : null);
+
+      if (!targetUrl || !dbId || Number.isNaN(dbId) || (!effectiveUserId && !effectiveGuestId) || !effectiveRoomId) {
         throw new Error(
-          `Invalid job data. targetUrl: ${targetUrl}, lighthousedbId: ${dbId}, actor: ${userId || guestId}`
+          `Invalid job data. targetUrl: ${targetUrl}, lighthousedbId: ${rawDbId}, actor: ${effectiveUserId || effectiveGuestId}, roomId: ${effectiveRoomId}`
         );
       }
-      console.log("roomid :",roomId)
+      console.log(`[Lighthouse] Processing for room: ${effectiveRoomId}, dbId: ${dbId}`);
 
       try {
-        // Mark as processing in DB
-        await Lighthouse.findByIdAndUpdate(dbId, {
-          status: "processing",
+        // 1. Mark as processing in DB
+        await prisma.lighthouse.update({
+          where: { id: dbId },
+          data: {
+            status: "processing",
+          },
+        }).catch((err) => {
+          if (err.code === "P2025") return null;
+          throw err;
         });
 
+        // 2. Run PageSpeed analysis
         const result = await runPageSpeed(targetUrl, { strategy });
 
         const isSuccess = Boolean(result && result.status !== "failed");
+        const errorMessage = isSuccess ? null : (result?.error || "Lighthouse analysis failed");
 
-        // Save result and status in MongoDB
-        await Lighthouse.findByIdAndUpdate(dbId, {
-          status: isSuccess ? "completed" : "failed",
-          result,
-          error: isSuccess ? null : (result?.error || "Lighthouse analysis failed"),
-          completedAt: new Date(),
+        // 3. Save result and status in PostgreSQL
+        await prisma.lighthouse.update({
+          where: { id: dbId },
+          data: {
+            status: isSuccess ? "completed" : "failed",
+            result: result || undefined,
+            error: errorMessage,
+            completedAt: new Date(),
+          },
+        }).catch((err) => {
+          if (err.code === "P2025") return null;
+          throw err;
         });
 
-        console.log(`[Lighthouse] Job ${job.id} completed successfully`);
+        console.log(`[Lighthouse] Job ${job.id} completed successfully with status: ${isSuccess ? "completed" : "failed"}`);
 
+        // Returned value is delivered to the pg-boss completion listener
         return {
           jobId: job.id,
-          userId,
-          guestId,
-          roomId,
-          lighthousedbId: dbId,
+          userId: effectiveUserId,
+          guestId: effectiveGuestId,
+          roomId: effectiveRoomId,
+          lighthousedbId: dbId.toString(),
           strategy,
           result,
           status: isSuccess ? "completed" : "failed",
+          error: errorMessage,
         };
       } catch (err) {
         console.error(`[Lighthouse] Error processing job ${job.id}:`, err);
 
-        if (dbId) {
+        // Only mark the row failed on the LAST attempt; earlier attempts will be retried
+        const isLastAttempt = job.retrycount >= job.retrylimit;
+        if (isLastAttempt && dbId && !Number.isNaN(dbId)) {
           try {
-            await Lighthouse.findByIdAndUpdate(dbId, {
-              status: "failed",
-              error: err.message || "Lighthouse analysis failed",
-              completedAt: new Date(),
+            await prisma.lighthouse.update({
+              where: { id: dbId },
+              data: {
+                status: "failed",
+                error: err.message || "Lighthouse analysis failed",
+                completedAt: new Date(),
+              },
+            }).catch((dbErr) => {
+              if (dbErr.code !== "P2025") {
+                console.error("[Lighthouse] DB update failed on job error:", dbErr);
+              }
             });
           } catch (dbErr) {
             console.error("[Lighthouse] DB update failed on job error:", dbErr);
           }
         }
 
-        throw err;
+        throw err; // pg-boss retries or marks the job failed and emits completion
       }
-    },
-    {
-      connection: sharedWorkerRedisConnection,
-      concurrency: 10,
     }
   );
 
-  worker.on("completed", (job) => {
-    console.log(`[Lighthouse] Job ${job?.id} completed successfully`);
-  });
-
-  worker.on("failed", (job, error) => {
-    console.error(`[Lighthouse] Job ${job?.id} failed:`, error?.message);
-  });
-
-  worker.on("error", (error) => {
-    console.error("[Lighthouse] Worker error:", error?.message);
-  });
-
-  return worker;
+  return {
+    workerId,
+    close: async () => boss.offWork(workerId),
+  };
 };
 
 export default startLighthouseWorker;

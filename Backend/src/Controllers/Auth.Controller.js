@@ -1,14 +1,10 @@
-import mongoose, { Types } from "mongoose";
-import Session from "../Models/Session.Model.js";
-import User from "../Models/User.Model.js";
+import { prisma } from "../config/db.prismaSQL.js";
 import { verifyIdToken } from "../Services/gAuth.Service.js";
 import { gAuthSchema } from "../Validators/ZodSchema.js";
 import { guestCookieName } from "../Middleware/guestDemo.Mw.js";
 import z from "zod";
 
 export const loginwithGoogle = async (req, res, next) => {
-  let mongooseSession = null;
-
   try {
     console.log("running auth controller");
     const { idToken } = req.body;
@@ -27,9 +23,12 @@ export const loginwithGoogle = async (req, res, next) => {
     }
 
     const { name, email, picture } = data;
-    console.log("parsed user data:", { name, email, picture });
+    const normalizedEmail = email.trim().toLowerCase();
+    console.log("parsed user data:", { name, email: normalizedEmail, picture });
 
-    let user = await User.findOne({ email });
+    let user = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
 
     if (user) {
       if (user.deleted) {
@@ -37,57 +36,54 @@ export const loginwithGoogle = async (req, res, next) => {
       }
 
       if (picture && (!user.picture || user.picture.includes("vecteezy"))) {
-        user.picture = picture;
-        await user.save();
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: { picture },
+        });
       }
 
-      const allSessions = await Session.find({ userId: user._id });
+      const allSessions = await prisma.session.findMany({
+        where: { userId: user.id, expiresAt: { gt: new Date() } },
+        orderBy: { createdAt: "asc" },
+      });
       if (allSessions.length >= 2) {
-        await allSessions[0].deleteOne();
+        const sessionsToDelete = allSessions.slice(0, allSessions.length - 1);
+        await prisma.session.deleteMany({
+          where: { id: { in: sessionsToDelete.map((s) => s.id) } },
+        });
       }
     } else {
       console.log("user doesn't exist, creating new user");
-      mongooseSession = await mongoose.startSession();
-      mongooseSession.startTransaction();
-
-      const userId = new Types.ObjectId();
-      const createdUsers = await User.create(
-        [
-          {
-            _id: userId,
-            name,
-            email,
-            picture: picture || undefined,
-          },
-        ],
-        { session: mongooseSession }
-      );
-      user = createdUsers[0];
-
-      await mongooseSession.commitTransaction();
-      mongooseSession.endSession();
-      mongooseSession = null;
+      user = await prisma.user.create({
+        data: {
+          name,
+          email: normalizedEmail,
+          picture: picture || undefined,
+        },
+      });
     }
 
-    const session = await Session.create({ userId: user._id });
+    const session = await prisma.session.create({
+      data: { userId: user.id },
+    });
     const sessionExpiryTime = 60 * 1000 * 60 * 24 * 7;
 
     const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
     const isProduction = process.env.NODE_ENV === "production" || isHttps;
 
-    res.cookie("sid", session._id.toString(), {
+    res.cookie("sid", session.id, {
       httpOnly: true,
       signed: true,
       maxAge: sessionExpiryTime,
-      sameSite: isProduction ? "none" : "lax",
-      secure: isProduction,
+      sameSite: "none" ,
+      secure: true,
     });
 
     res.clearCookie(guestCookieName, {
       httpOnly: true,
       signed: true,
-      secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
+      secure: true,
+      sameSite: "none",
     });
 
     const guestId = req.headers["x-guest-id"] || req.body?.guestId || req.signedCookies?.[guestCookieName];
@@ -95,13 +91,13 @@ export const loginwithGoogle = async (req, res, next) => {
       const io = req.app.get("io");
       if (io) {
         const guestRoom = `guest:${guestId}`;
-        const userRoom = `user:${user._id}`;
+        const userRoom = `user:${user.id}`;
         try {
           const sockets = await io.in(guestRoom).fetchSockets();
           for (const s of sockets) {
             s.leave(guestRoom);
             s.join(userRoom);
-            s.data.userId = user._id.toString();
+            s.data.userId = user.id.toString();
             s.data.roomId = userRoom;
             s.data.roomIds = [userRoom];
             delete s.data.guestId;
@@ -116,14 +112,15 @@ export const loginwithGoogle = async (req, res, next) => {
       }
     }
 
-    console.log("Saved session:", session._id.toString());
+    console.log("Saved session:", session.id);
 
     return res.status(200).json({
       message: "logged in",
-      token: session._id.toString(),
-      sessionId: session._id.toString(),
+      token: session.id,
+      sessionId: session.id,
       user: {
-        id: user._id,
+        id: user.id,
+        _id: user.id,
         name: user.name,
         email: user.email,
         picture: user.picture,
@@ -133,14 +130,6 @@ export const loginwithGoogle = async (req, res, next) => {
     });
   } catch (err) {
     console.error("Google Auth Error:", err);
-    if (mongooseSession) {
-      try {
-        await mongooseSession.abortTransaction();
-        await mongooseSession.endSession();
-      } catch (abortErr) {
-        console.error("Error aborting mongoose transaction:", abortErr);
-      }
-    }
     return res.status(500).json({ message: "Something went wrong during Google authentication" });
   }
-};
+};

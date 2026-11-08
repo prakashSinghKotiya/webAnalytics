@@ -1,6 +1,4 @@
-import { UptimeMonitor } from "../Models/UptimeMonitor.Model.js";
-import { UptimeResult } from "../Models/UptimeResults.Model.js";
-
+import { prisma } from "../config/db.prismaSQL.js";
 import {
     createUptimeScheduler,
     updateUptimeScheduler,
@@ -9,9 +7,6 @@ import {
 
 import dns from "node:dns/promises";
 import net from "node:net";
-
-
-
 
 const resolver = new dns.Resolver({ timeout: 3000, tries: 2 });
 
@@ -118,53 +113,124 @@ export const getDomainHostingInfo = async (hostname) => {
     return result; // partial data preserved
 };
 
-
-
-const ALLOWED_INTERVALS = new Set(["1m", "5m", "10m", "30m", "1h"]);
+const ALLOWED_INTERVALS = new Set(["1m", "5m", "15m", "30m", "1h", "m1", "m5", "m15", "m30", "h1"]);
 const ALLOWED_STATUSES = new Set(["active", "paused"]);
 
+const INTERVAL_TO_PRISMA = {
+    "1m": "m1",
+    "5m": "m5",
+    "10m": "m15",
+    "15m": "m15",
+    "30m": "m30",
+    "1h": "h1",
+    m1: "m1",
+    m5: "m5",
+    m10: "m15",
+    m15: "m15",
+    m30: "m30",
+    h1: "h1",
+};
 
+const PRISMA_TO_INTERVAL = {
+    m1: "1m",
+    m5: "5m",
+    m10: "15m",
+    m15: "15m",
+    m30: "30m",
+    h1: "1h",
+    "1m": "1m",
+    "5m": "5m",
+    "10m": "15m",
+    "15m": "15m",
+    "30m": "30m",
+    "1h": "1h",
+};
+
+const MAX_MONITORS_PER_USER = 2
+
+const toPrismaInterval = (val) => INTERVAL_TO_PRISMA[val] || "m5";
+const fromPrismaInterval = (val) => PRISMA_TO_INTERVAL[val] || val;
+
+const sanitizeLastResult = (lastResult) => {
+    if (!lastResult || typeof lastResult !== "object") return lastResult;
+    const { runnerName, runner, runnerId, ...clean } = lastResult;
+    return clean;
+};
+
+const formatMonitor = (m) => {
+    if (!m) return null;
+    const { runnerId, runner, runnerName, ...rest } = m;
+    return {
+        ...rest,
+        lastResult: sanitizeLastResult(rest.lastResult),
+        _id: m.id,
+        interval: fromPrismaInterval(m.interval),
+    };
+};
+
+const formatResult = (r) => {
+    if (!r) return null;
+    const { runnerName, runner, runnerId, ...rest } = r;
+    return {
+        ...rest,
+        id: r.id.toString(),
+        _id: r.id.toString(),
+    };
+};
 
 export const createMonitor = async (req, res) => {
     try {
-        const { url, interval = "5m" } = req.body;
+        const { url, interval = "15m" } = req.body;
 
-        
+        if(interval === "5m" || interval === "1m"){
+            return res.status(400).json({error:  "Coming soon !!"})
+        }
 
         if (!url) {
             return res.status(400).json({ error: "URL is required." });
         }
-        let parsedurl 
+        let parsedurl;
 
         try {
-          parsedurl = new URL(url);
+            parsedurl = new URL(url);
         } catch (err) {
             return res.status(400).json({ error: "Invalid URL format. Include http:// or https://" });
         }
 
         if (!ALLOWED_INTERVALS.has(interval)) {
             return res.status(400).json({ 
-                error: `Invalid interval. Allowed values are: ${[...ALLOWED_INTERVALS].join(", ")}` 
+                error: `Invalid interval. Allowed values are: 1m, 5m, 15m, 30m, 1h` 
             });
         }
 
-        const roomId = `user:${req.user._id}`
-        const hostinginfo =  await getDomainHostingInfo(parsedurl.hostname)
+        const userId = Number(req.user._id || req.user.id);
+        const roomId = `user:${userId}`;
+        const monitorCount = await prisma.uptimeMonitor.count({ where: { userId } });
 
-        const monitor = await UptimeMonitor.create({
-            url:parsedurl.href,
-            interval,
-            status: "active",
-            userId: req.user._id,
-            hostinginfo
+if (monitorCount >= MAX_MONITORS_PER_USER) {
+    return res.status(403).json({
+        error: `Monitor limit reached. You can create a maximum of ${MAX_MONITORS_PER_USER} monitors at this time.`
+    });
+}
+        const hostinginfo = await getDomainHostingInfo(parsedurl.hostname);
+
+        const monitor = await prisma.uptimeMonitor.create({
+            data: {
+                url: parsedurl.href,
+                interval: toPrismaInterval(interval),
+                status: "active",
+                userId,
+                hostinginfo: hostinginfo || undefined,
+            }
         });
- 
+
+        const formattedMonitor = formatMonitor(monitor);
 
         try {
-            await createUptimeScheduler(monitor,roomId);
+            await createUptimeScheduler(formattedMonitor, roomId);
         } catch (schedulerError) {
-            await UptimeMonitor.findByIdAndDelete(monitor._id);
-            console.error(`[MonitorCreation] Scheduler failed, rollback successful for ${monitor._id}:`, schedulerError);
+            await prisma.uptimeMonitor.delete({ where: { id: monitor.id } }).catch(() => {});
+            console.error(`[MonitorCreation] Scheduler failed, rollback successful for ${monitor.id}:`, schedulerError);
             
             return res.status(500).json({ 
                 error: "Failed to initialize the background scheduler. Please try again." 
@@ -175,18 +241,24 @@ export const createMonitor = async (req, res) => {
             message: "Monitor created successfully",
             roomId,
             monitor: {
-                id: monitor._id,
+                id: monitor.id,
+                _id: monitor.id,
                 url: monitor.url,
-                interval: monitor.interval,
+                interval: fromPrismaInterval(monitor.interval),
                 status: monitor.status,
                 hostinginfo: monitor.hostinginfo,
-                
+                createdAt: monitor.createdAt,
             }
         });
 
     } catch (error) {
-        
         console.error("[MonitorCreation] Unexpected error:", error);
+
+        if (error.code === "P2002") {
+            return res.status(409).json({
+                error: "A monitor for this URL already exists for your account."
+            });
+        }
         
         return res.status(500).json({
             error: "An unexpected internal server error occurred."
@@ -194,14 +266,15 @@ export const createMonitor = async (req, res) => {
     }
 };
 
-
-
 // UPDATE
-
 export const updateMonitor = async (req, res) => {
     try {   
         const { id } = req.params;
         const { url, interval, status } = req.body;
+        
+         if(interval === "5m" || interval === "1m"){
+            return res.status(400).json({error:  "Coming soon !!"})
+        }
 
         try {
             new URL(url);
@@ -211,7 +284,7 @@ export const updateMonitor = async (req, res) => {
 
         if (!ALLOWED_INTERVALS.has(interval)) {
             return res.status(400).json({
-                error: `Invalid interval. Allowed values are: ${[...ALLOWED_INTERVALS].join(", ")}`
+                error: `Invalid interval. Allowed values are: 1m, 5m, 15m, 30m, 1h`
             });
         }
 
@@ -219,30 +292,47 @@ export const updateMonitor = async (req, res) => {
             return res.status(400).json({ error: `Invalid Status.` });
         }
 
-        const existing = await UptimeMonitor.findById(id);
+        const monitorId = parseInt(id, 10);
+        if (Number.isNaN(monitorId)) {
+            return res.status(404).json({ error: "Monitor not found" });
+        }
+
+        const existing = await prisma.uptimeMonitor.findUnique({
+            where: { id: monitorId },
+        });
         if (!existing) {
             return res.status(404).json({ error: "Monitor not found" });
         }
 
-        const isOwner = existing.userId.toString() === req.user._id.toString();
-        const isAdminUser = req.user.role === "Admin";
+        const userId = Number(req.user._id || req.user.id);
+        const isOwner = existing.userId === userId;
+    
+
+
+        
+        const isAdminUser = req.user.role === "Admin" || req.user.role === "SuperAdmin";
         if (!isOwner && !isAdminUser) {
             return res.status(403).json({ error: "Access denied: You do not have permission to update this monitor." });
         }
 
         const roomId = `user:${existing.userId}`;
 
-        const monitor = await UptimeMonitor.findByIdAndUpdate(id, {
-            url: url,
-            interval: interval,
-            status: status
-        }, { returnDocument: "after" }).lean();
+        const monitor = await prisma.uptimeMonitor.update({
+            where: { id: monitorId },
+            data: {
+                url: url,
+                interval: toPrismaInterval(interval),
+                status: status,
+            },
+        });
+
+        const formattedMonitor = formatMonitor(monitor);
 
         try {
-            if (monitor.status === "active") {
-                await updateUptimeScheduler(monitor, roomId);
-            } else if (monitor.status === "paused") {
-                await removeUptimeScheduler(monitor._id, roomId);
+            if (formattedMonitor.status === "active") {
+                await updateUptimeScheduler(formattedMonitor, roomId);
+            } else if (formattedMonitor.status === "paused") {
+                await removeUptimeScheduler(formattedMonitor.id, roomId);
             }
         } catch (schedulerError) {
             console.error(`[MonitorUpdate] Scheduler sync failed for ${id}:`, schedulerError);
@@ -251,17 +341,14 @@ export const updateMonitor = async (req, res) => {
             });
         }
 
-        return res.status(200).json({ message: "Monitor updated", monitor });
+        return res.status(200).json({ message: "Monitor updated", monitor: formattedMonitor });
     } catch (error) {
         console.error(error);
         return res.status(500).json({ error: error.message });
     }
 };
 
-
-
 // PAUSE
-
 export const pauseMonitor = async (req, res) => {
     try {
         const { id } = req.params;
@@ -270,14 +357,22 @@ export const pauseMonitor = async (req, res) => {
             return res.status(400).json({ error: "Monitor ID is required" });
         }
 
-        const monitor = await UptimeMonitor.findById(id);
+        const monitorId = parseInt(id, 10);
+        if (Number.isNaN(monitorId)) {
+            return res.status(404).json({ error: "Monitor not found" });
+        }
+
+        const monitor = await prisma.uptimeMonitor.findUnique({
+            where: { id: monitorId },
+        });
         
         if (!monitor) {
             return res.status(404).json({ error: "Monitor not found" });
         }
 
-        const isOwner = monitor.userId.toString() === req.user._id.toString();
-        const isAdminUser = req.user.role === "Admin";
+        const userId = Number(req.user._id || req.user.id);
+        const isOwner = monitor.userId === userId;
+        const isAdminUser = req.user.role === "Admin" || req.user.role === "SuperAdmin";
         if (!isOwner && !isAdminUser) {
             return res.status(403).json({ error: "Access denied: You do not have permission to pause this monitor." });
         }
@@ -285,64 +380,81 @@ export const pauseMonitor = async (req, res) => {
         const roomId = `user:${monitor.userId}`;
 
         try {
-            await removeUptimeScheduler(monitor._id, roomId); 
+            await removeUptimeScheduler(monitor.id, roomId); 
         } catch (error) {
             return res.status(500).json({ 
                 error: "Failed to pause the background scheduler. Please try again." 
             });
         }
 
-        monitor.status = "paused";
-        await monitor.save();
+        const updated = await prisma.uptimeMonitor.update({
+            where: { id: monitorId },
+            data: { status: "paused" },
+        });
 
-        return res.status(200).json({ message: "Monitor paused", monitor }); 
+        return res.status(200).json({ message: "Monitor paused", monitor: formatMonitor(updated) }); 
     } catch (error) { 
         console.error(error); 
         return res.status(500).json({ error: "An internal server error occurred." });
     }
 };
 
-
 // RESUME
-
 export const resumeMonitor = async (req, res) => {
     try {
         const { id } = req.params;
-        const monitor = await UptimeMonitor.findById(id);
+        const monitorId = parseInt(id, 10);
+        if (Number.isNaN(monitorId)) {
+            return res.status(404).json({
+                error: "Monitor not found"
+            });
+        }
+
+        const monitor = await prisma.uptimeMonitor.findUnique({
+            where: { id: monitorId },
+        });
 
         if (!monitor) { 
-             return res.status(404).json({
+            return res.status(404).json({
                 error: "Monitor not found"
             });      
         }
 
-        const isOwner = monitor.userId.toString() === req.user._id.toString();
-        const isAdminUser = req.user.role === "Admin";
+        const userId = Number(req.user._id || req.user.id);
+        const isOwner = monitor.userId === userId;
+        const isAdminUser = req.user.role === "Admin" || req.user.role === "SuperAdmin";
         if (!isOwner && !isAdminUser) {
             return res.status(403).json({ error: "Access denied: You do not have permission to resume this monitor." });
         }
 
         const roomId = `user:${monitor.userId}`;
+        const formattedMonitor = formatMonitor(monitor);
 
         if (monitor.status === "active") {
             return res.status(200).json({
                 message: "Monitor is already active",
-                monitor
+                monitor: formattedMonitor,
             });
         }
 
         // Store previous status in case we need to roll back
         const previousStatus = monitor.status;
         
-        monitor.status = "active";
-        await monitor.save();
+        const updated = await prisma.uptimeMonitor.update({
+            where: { id: monitorId },
+            data: { status: "active" },
+        });
+
+        const updatedFormatted = formatMonitor(updated);
 
         try {
-            await createUptimeScheduler(monitor, roomId); // Starting the scheduler
+            await createUptimeScheduler(updatedFormatted, roomId); // Starting the scheduler
         } catch (schedulerError) {
             console.error("Failed to start scheduler, rolling back DB:", schedulerError);
-            monitor.status = previousStatus; // Revert to paused/stopped
-            await monitor.save();
+            await prisma.uptimeMonitor.update({
+                where: { id: monitorId },
+                data: { status: previousStatus },
+            }).catch(() => {});
             
             return res.status(500).json({
                 error: "Failed to start the monitoring process. Monitor remains paused."
@@ -351,7 +463,7 @@ export const resumeMonitor = async (req, res) => {
 
         return res.status(200).json({
             message: "Monitor resumed successfully",
-            monitor
+            monitor: updatedFormatted,
         });
     } catch (error) {
         console.error("Error resuming monitor:", error);
@@ -361,15 +473,20 @@ export const resumeMonitor = async (req, res) => {
     }
 };
 
-
-
 // DELETE
-
 export const deleteMonitor = async (req, res) => {
     try {
         const { id } = req.params;
+        const monitorId = parseInt(id, 10);
+        if (Number.isNaN(monitorId)) {
+            return res.status(404).json({
+                error: "Monitor not found"
+            });
+        }
 
-        const monitor = await UptimeMonitor.findById(id);
+        const monitor = await prisma.uptimeMonitor.findUnique({
+            where: { id: monitorId },
+        });
 
         if (!monitor) {
             return res.status(404).json({
@@ -377,8 +494,9 @@ export const deleteMonitor = async (req, res) => {
             });
         }
 
-        const isOwner = monitor.userId.toString() === req.user._id.toString();
-        const isAdminUser = req.user.role === "Admin";
+        const userId = Number(req.user._id || req.user.id);
+        const isOwner = monitor.userId === userId;
+        const isAdminUser = req.user.role === "Admin" || req.user.role === "SuperAdmin";
         if (!isOwner && !isAdminUser) {
             return res.status(403).json({ error: "Access denied: You do not have permission to delete this monitor." });
         }
@@ -386,14 +504,14 @@ export const deleteMonitor = async (req, res) => {
         const roomId = `user:${monitor.userId}`;
 
         try {
-            await removeUptimeScheduler(monitor._id, roomId);
+            await removeUptimeScheduler(monitor.id, roomId);
         } catch (schedulerError) {
             console.warn(`Failed to remove scheduler for monitor ${id}, proceeding with DB deletion:`, schedulerError);
         }
 
-        await Promise.all([
-            monitor.deleteOne(),
-            UptimeResult.deleteMany({ monitorId: monitor._id }),
+        await prisma.$transaction([
+            prisma.uptimeResult.deleteMany({ where: { monitorId } }),
+            prisma.uptimeMonitor.delete({ where: { id: monitorId } }),
         ]);
 
         return res.status(200).json({
@@ -407,35 +525,34 @@ export const deleteMonitor = async (req, res) => {
     }
 };
 
-
-
 // GET: Fetch all monitors for current user with optional status filter & pagination
 export const getMonitors = async (req, res) => {
     try {
-        const userId = req.user._id;
+        const userId = Number(req.user._id || req.user.id);
         const { status, page = 1, limit = 20 } = req.query;
 
         const pageNum = Math.max(1, parseInt(page, 10) || 1);
         const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
         const skip = (pageNum - 1) * limitNum;
 
-        const query = { userId };
+        const where = { userId };
         if (status && ALLOWED_STATUSES.has(status)) {
-            query.status = status;
+            where.status = status;
         }
 
         const [monitors, total] = await Promise.all([
-            UptimeMonitor.find(query)
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(limitNum)
-                .lean(),
-            UptimeMonitor.countDocuments(query),
+            prisma.uptimeMonitor.findMany({
+                where,
+                orderBy: { createdAt: "desc" },
+                skip,
+                take: limitNum,
+            }),
+            prisma.uptimeMonitor.count({ where }),
         ]);
 
         return res.status(200).json({
             success: true,
-            monitors,
+            monitors: monitors.map(formatMonitor),
             pagination: {
                 page: pageNum,
                 limit: limitNum,
@@ -453,12 +570,9 @@ export const getMonitors = async (req, res) => {
     }
 };
 
-
-
-
 export const getRunningMonitorDetails = async (req, res) => {
     try {
-        const userId = req.user._id;
+        const userId = Number(req.user._id || req.user.id);
         const { id } = req.params;
 
         if (!id) {
@@ -468,11 +582,21 @@ export const getRunningMonitorDetails = async (req, res) => {
             });
         }
 
+        const monitorId = parseInt(id, 10);
+        if (Number.isNaN(monitorId)) {
+            return res.status(404).json({
+                success: false,
+                error: "Uptime monitor not found",
+            });
+        }
+
         // Query by monitorId and userId to enforce strict multi-tenant ownership
-        const monitor = await UptimeMonitor.findOne({
-            _id: id,
-            userId,
-        }).lean();
+        const monitor = await prisma.uptimeMonitor.findFirst({
+            where: {
+                id: monitorId,
+                userId,
+            },
+        });
 
         if (!monitor) {
             return res.status(404).json({
@@ -483,7 +607,7 @@ export const getRunningMonitorDetails = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            monitor,
+            monitor: formatMonitor(monitor),
         });
     } catch (error) {
         console.error("Error fetching running monitor details:", error);
@@ -494,12 +618,9 @@ export const getRunningMonitorDetails = async (req, res) => {
     }
 };
 
-
-
-
 export const getRecentMonitorResults = async (req, res) => {
     try {
-        const userId = req.user._id;
+        const userId = Number(req.user._id || req.user.id);
         const { id } = req.params;
         const { page = 1, limit = 50, status } = req.query;
 
@@ -510,10 +631,21 @@ export const getRecentMonitorResults = async (req, res) => {
             });
         }
 
+        const monitorId = parseInt(id, 10);
+        if (Number.isNaN(monitorId)) {
+            return res.status(404).json({
+                success: false,
+                error: "Uptime monitor not found",
+            });
+        }
+
         // 1. Verify monitor exists and belongs to the user
-        const monitorExists = await UptimeMonitor.exists({
-            _id: id,
-            userId,
+        const monitorExists = await prisma.uptimeMonitor.findFirst({
+            where: {
+                id: monitorId,
+                userId,
+            },
+            select: { id: true },
         });
 
         if (!monitorExists) {
@@ -527,29 +659,39 @@ export const getRecentMonitorResults = async (req, res) => {
         const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
         const skip = (pageNum - 1) * limitNum;
 
-        // Uses compound index { monitorId: 1, checkedAt: -1 }
-        const query = {
-            monitorId: id,
+        const where = {
+            monitorId,
             userId,
         };
 
         if (status) {
-            query["result.status"] = status.toUpperCase();
+            where.result = {
+                path: ["status"],
+                equals: status.toUpperCase(),
+            };
         }
 
         const [results, total] = await Promise.all([
-            UptimeResult.find(query)
-                .sort({ checkedAt: -1 })
-                .skip(skip)
-                .limit(limitNum)
-                .lean(),
-            UptimeResult.countDocuments(query),
+            prisma.uptimeResult.findMany({
+                where,
+                select: {
+                    id: true,
+                    monitorId: true,
+                    userId: true,
+                    result: true,
+                    checkedAt: true,
+                },
+                orderBy: { checkedAt: "desc" },
+                skip,
+                take: limitNum,
+            }),
+            prisma.uptimeResult.count({ where }),
         ]);
 
         return res.status(200).json({
             success: true,
             monitorId: id,
-            results,
+            results: results.map(formatResult),
             pagination: {
                 page: pageNum,
                 limit: limitNum,
@@ -587,4 +729,10 @@ export {
     adminBulkUpdateInterval,
     adminGetMonitorIncidents,
     adminExportMonitors,
+    adminGetRunners,
+    adminCreateRunner,
+    adminActivateRunner,
+    adminTestRunner,
+    adminDeleteRunner,
 } from "./Admin.Controller.js";
+

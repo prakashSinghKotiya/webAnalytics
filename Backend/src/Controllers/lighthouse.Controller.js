@@ -1,7 +1,8 @@
-import { Lighthouse } from "../Models/Lighthouse.Model.js";
-import { Lighthouequeue } from "../queue/Lighthouse.queue.js";
+import { prisma } from "../config/db.prismaSQL.js";
+import { boss, lighthouseQueueName } from "../queue/Lighthouse.queue.js";
 import { normalizePublicHttpUrl } from "../Services/publicUrl.Service.js";
 import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
+import { resolveServiceRecord } from "../Services/jobIdResolver.Service.js";
 
 export const LighthouseResult = async (req, res) => {
   let lighthouseDb = null;
@@ -27,44 +28,52 @@ export const LighthouseResult = async (req, res) => {
       });
     }
 
-    const userId = req.user?._id?.toString();
+    const rawUserId = req.user?._id || req.user?.id;
+    const userId = rawUserId ? Number(rawUserId) : null;
     const guestId = req.guestId;
     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
     // 1. Create DB record first with status 'queued'
-    lighthouseDb = await Lighthouse.create({
-      ...(userId ? { userId } : { guestId }),
-      roomId,
-      url: targetUrl,
-      strategy,
-      status: "queued",
+    lighthouseDb = await prisma.lighthouse.create({
+      data: {
+        ...(userId ? { userId } : { guestId }),
+        roomId,
+        url: targetUrl,
+        strategy,
+        status: "queued",
+      },
     });
 
-    const lighthousedbId = lighthouseDb._id.toString();
+    const lighthousedbId = lighthouseDb.id.toString();
 
-    // 2. Use MongoDB document ID as BullMQ job ID
-    const job = await Lighthouequeue.add(
-      "measure-lighthouse",
+    // 2. pg-boss generates the job id (UUID); the PostgreSQL record id travels in the job data
+    const jobId = await boss.send(
+      lighthouseQueueName,
       {
         targetUrl,
-        userId,
+        userId: userId ? userId.toString() : undefined,
         guestId,
         lighthousedbId,
         strategy,
         roomId,
       },
       {
-        jobId: lighthousedbId,
+        expireInSeconds: 180, // PageSpeed can take 60-90s, keep above worker timeout
       }
     );
+
+    if (!jobId) throw new Error("Failed to enqueue Lighthouse job");
 
     return res.status(202).json({
       success: true,
       message: "Lighthouse analysis started",
-      jobId: job.id,
+      jobId,
       lighthousedbId,
       roomId,
-      data: lighthouseDb,
+      data: {
+        ...lighthouseDb,
+        _id: lighthouseDb.id,
+      },
       guest: !userId,
       remaining: userId ? undefined : req.guestDemoRemaining,
       totalLimit: userId ? undefined : req.guestDemoTotalLimit,
@@ -73,8 +82,8 @@ export const LighthouseResult = async (req, res) => {
     console.error("LighthouseResult error:", error);
     await releaseGuestDemoReservation(req);
 
-    if (lighthouseDb?._id) {
-      await Lighthouse.findByIdAndDelete(lighthouseDb._id).catch(() => {});
+    if (lighthouseDb?.id) {
+      await prisma.lighthouse.delete({ where: { id: lighthouseDb.id } }).catch(() => {});
     }
 
     return res.status(500).json({
@@ -87,7 +96,8 @@ export const LighthouseResult = async (req, res) => {
 
 export const getLighthouseResults = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const rawUserId = req.user?._id || req.user?.id;
+    const userId = Number(rawUserId);
     const {
       page = 1,
       limit = 20,
@@ -99,31 +109,32 @@ export const getLighthouseResults = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
-    const query = {
+    const where = {
       userId,
-      result: { $ne: null },
+      result: { not: null },
     };
 
     if (status) {
-      query.status = status;
+      where.status = status;
     }
 
     if (url) {
-      query.url = { $regex: url.trim(), $options: "i" };
+      where.url = { contains: url.trim(), mode: "insensitive" };
     }
 
     const [results, total] = await Promise.all([
-      Lighthouse.find(query)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Lighthouse.countDocuments(query),
+      prisma.lighthouse.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limitNum,
+      }),
+      prisma.lighthouse.count({ where }),
     ]);
 
     return res.status(200).json({
       success: true,
-      data: results,
+      data: results.map((r) => ({ ...r, _id: r.id })),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -142,15 +153,24 @@ export const getLighthouseResults = async (req, res) => {
 
 export const getLighthouseById = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const rawUserId = req.user?._id || req.user?.id;
+    const userId = rawUserId ? Number(rawUserId) : null;
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
+    const numericId = parseInt(id, 10);
+    if (Number.isNaN(numericId)) {
+      return res.status(404).json({
+        success: false,
+        message: "Lighthouse record not found",
+      });
+    }
+
+    const where = { id: numericId };
     if (userId) {
-      query.userId = userId;
+      where.userId = userId;
     } else if (guestId) {
-      query.guestId = guestId;
+      where.guestId = guestId;
     } else {
       return res.status(401).json({
         success: false,
@@ -158,7 +178,7 @@ export const getLighthouseById = async (req, res) => {
       });
     }
 
-    const result = await Lighthouse.findOne(query).lean();
+    const result = await prisma.lighthouse.findFirst({ where });
 
     if (!result) {
       return res.status(404).json({
@@ -169,7 +189,10 @@ export const getLighthouseById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: result,
+      data: {
+        ...result,
+        _id: result.id,
+      },
     });
   } catch (error) {
     console.error("getLighthouseById error:", error);
@@ -182,41 +205,44 @@ export const getLighthouseById = async (req, res) => {
 
 export const getLighthouseStatus = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const rawUserId = req.user?._id || req.user?.id;
+    const userId = rawUserId ? Number(rawUserId) : null;
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
-    if (userId) {
-      query.userId = userId;
-    } else if (guestId) {
-      query.guestId = guestId;
-    } else {
+    if (!userId && !guestId) {
       return res.status(401).json({
         success: false,
         message: "Authentication or guest session required",
       });
     }
 
-    const result = await Lighthouse.findOne(query).lean();
+    const { doc } = await resolveServiceRecord({
+      service: "lighthouse",
+      id,
+      userId,
+      guestId,
+    });
 
-    if (!result) {
+    if (!doc) {
       return res.status(404).json({
         success: false,
         message: "Lighthouse record not found",
       });
     }
 
+    const docIdStr = doc.id.toString();
     return res.status(200).json({
       success: true,
-      jobId: result._id.toString(),
-      lighthousedbId: result._id.toString(),
-      status: result.status,
-      strategy: result.strategy,
-      result: result.result,
-      error: result.error || null,
-      createdAt: result.createdAt,
-      completedAt: result.completedAt || null,
+      jobId: docIdStr,
+      lighthousedbId: docIdStr,
+      id: doc.id,
+      status: doc.status,
+      strategy: doc.strategy,
+      result: doc.result,
+      error: doc.error || null,
+      createdAt: doc.createdAt,
+      completedAt: doc.completedAt || null,
     });
   } catch (error) {
     console.error("getLighthouseStatus error:", error);

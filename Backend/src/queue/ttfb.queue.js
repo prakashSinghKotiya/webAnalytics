@@ -1,43 +1,23 @@
-import { Queue } from "bullmq";
-import { sharedRedisConnection } from "../config/redis.js";
+import { boss, stopPgBoss } from "./boss.js";
 
-const defaultJobOptions = {
-  attempts: 3, // if job fails, it will be retried 3 times
-  backoff: {
-    type: "exponential",
-    delay: 1000, // delay doubled on each retry (1s, 2s, 4s)
-  },
-  removeOnComplete: { age: 300, count: 500 },
-  removeOnFail: { age: 300, count: 500 },
+export const ttfbQueues = {
+  india: "ttfb-india",     // equivalent to new Queue("ttfb-india",)      
+  canada: "ttfb-canada",
+  singapore: "ttfb-singapore",
 };
 
-export const indiaTtfbQueue = new Queue("ttfb-india", {
-    connection: sharedRedisConnection,
-    defaultJobOptions,
-});
+// One shared pg-boss instance per process
+export { boss };
 
-export const europeTtfbQueue = new Queue("ttfb-europe", {
-    connection: sharedRedisConnection,
-    defaultJobOptions,
-});
+// Call from your SIGTERM/SIGINT handler: waits for running jobs, then closes the pool.
+export const stopTtfbQueue = stopPgBoss;
 
-export const usaTtfbQueue = new Queue("ttfb-usa", {
-    connection: sharedRedisConnection,
-    defaultJobOptions,
-});
-
-
-
-
-
-const attachQueueErrorHandler = (queue, region) => {  //error handler for queue errors
-    queue.on("error", (err) => {
-        console.error(`[${region}] Queue Error:`, err);
-    });
-};
-
-attachQueueErrorHandler(indiaTtfbQueue, "india");
-attachQueueErrorHandler(europeTtfbQueue, "europe");
-attachQueueErrorHandler(usaTtfbQueue, "usa");
-
-
+//bullmq reference
+// import { Queue } from "bullmq";
+// import { sharedRedisConnection } from "../config/redis.js";
+// const defaultJobOptions = {
+//   attempts: 3,
+//   backoff: { type: "exponential", delay: 1000 },
+//   removeOnComplete: { age: 300, count: 500 },
+//   removeOnFail: { age: 300, count: 500 },
+// };

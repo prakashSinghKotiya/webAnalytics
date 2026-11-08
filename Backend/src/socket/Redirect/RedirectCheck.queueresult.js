@@ -1,8 +1,7 @@
-import { redirectQueue } from "../../queue/redirectCheck.Queue.js";
 import { redirectQueueListener } from "../../queue/redirectCheck.QeventListner.js";
-import { RedirectCheck } from "../../Models/redirectCheck.Model.js";
+import { prisma } from "../../config/db.prismaSQL.js";
 
-// Handling BullMQ queue events when Redirect Check jobs complete or fail
+// Handling pg-boss queue events when Redirect Check jobs complete or fail
 export const redirectQueueResultHandler = (io) => {
   handleRedirectQueueEvent(redirectQueueListener, io);
 };
@@ -10,54 +9,40 @@ export const redirectQueueResultHandler = (io) => {
 export const setupRedirectQueueResult = redirectQueueResultHandler;
 
 export const handleRedirectQueueEvent = (queueEvent, io) => {
-  // Connection error handling
+  // Connection / stream error handler to avoid unhandled EventEmitter exceptions
   queueEvent.on("error", (err) => {
     console.error("[redirectCheck] QueueEvents error:", err);
   });
 
-  // Completed job event
+  // Completed job event - result comes straight from the worker's return value
   queueEvent.on("completed", async ({ jobId, returnvalue, returnValue }) => {
     try {
-      let raw = returnvalue || returnValue;
-      let data = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const raw = returnvalue || returnValue;
+      const data = typeof raw === "string" ? JSON.parse(raw) : raw;
 
       if (!data) {
         console.warn(`[redirectCheck] No returnvalue data found for job ${jobId}`);
+        return;
       }
 
       let userRoom =
-        data?.roomId ||
-        (data?.userId
-          ? `user:${data.userId}`
-          : data?.guestId
-          ? `guest:${data.guestId}`
-          : null);
+        data.roomId ||
+        (data.userId ? `user:${data.userId}` : data.guestId ? `guest:${data.guestId}` : null);
 
-      // Fallback to DB document if room not in payload
-      if (!userRoom && jobId) {
-        const doc = await RedirectCheck.findById(jobId).lean();
-        userRoom =
-          doc?.roomId ||
-          (doc?.userId
-            ? `user:${doc.userId}`
-            : doc?.guestId
-            ? `guest:${doc.guestId}`
-            : null);
-      }
-
-      // Final fallback to Redis job
-      if (!userRoom) {
-        try {
-          const job = await redirectQueue.getJob(jobId);
-          if (job?.data?.roomId) {
-            userRoom = job.data.roomId;
-          } else if (job?.data?.userId) {
-            userRoom = `user:${job.data.userId}`;
-          } else if (job?.data?.guestId) {
-            userRoom = `guest:${job.data.guestId}`;
+      // Fallback to DB record if userRoom is missing
+      if (!userRoom && (data.redirectCheckId || data.recordId)) {
+        const rawId = (data.redirectCheckId || data.recordId).toString();
+        const match = rawId.match(/\d+$/);
+        const id = match ? parseInt(match[0], 10) : null;
+        if (id && !Number.isNaN(id)) {
+          const doc = await prisma.redirectCheck.findFirst({ where: { id } }).catch(() => null);
+          if (doc?.roomId) {
+            userRoom = doc.roomId;
+          } else if (doc?.userId) {
+            userRoom = `user:${doc.userId}`;
+          } else if (doc?.guestId) {
+            userRoom = `guest:${doc.guestId}`;
           }
-        } catch (jobErr) {
-          console.error(`[redirectCheck] Error retrieving job ${jobId} on complete:`, jobErr);
         }
       }
 
@@ -66,14 +51,15 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         return;
       }
 
+      const redirectCheckId = (data.redirectCheckId || data.recordId || jobId).toString();
       const payload = {
         jobId,
-        redirectCheckId: data?.redirectCheckId || data?.recordId || jobId,
-        recordId: data?.recordId || data?.redirectCheckId || jobId,
+        redirectCheckId,
+        recordId: redirectCheckId,
         roomId: userRoom,
-        result: data?.result,
-        status: data?.status || "completed",
-        error: data?.error || null,
+        result: data.result,
+        status: data.status || "completed",
+        error: data.error || null,
       };
 
       const sockets = await io.in(userRoom).fetchSockets();
@@ -92,37 +78,35 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
     }
   });
 
-  // Failed job event
-  queueEvent.on("failed", async ({ jobId, failedReason }) => {
+  // Failed job event - fires once after retries are used up (or job expired)
+  queueEvent.on("failed", async ({ jobId, failedReason, data }) => {
     console.error(`[redirectCheck] Job ${jobId} failed:`, failedReason);
 
     try {
-      const doc = await RedirectCheck.findByIdAndUpdate(
-        jobId,
-        {
-          status: "failed",
-          error: failedReason || "Redirect check failed",
-          completedAt: new Date(),
-        },
-        { new: true }
-      ).lean();
+      const rawId = (data?.redirectCheckId || data?.recordId)?.toString();
+      const match = rawId?.match(/\d+$/);
+      const redirectId = match ? parseInt(match[0], 10) : null;
 
-      let userRoom =
-        doc?.roomId ||
-        (doc?.userId ? `user:${doc.userId}` : doc?.guestId ? `guest:${doc.guestId}` : null);
+      if (redirectId && !Number.isNaN(redirectId)) {
+        // Only touches rows that are not already completed/failed (never overwrites a result)
+        await prisma.redirectCheck.updateMany({
+          where: { id: redirectId, status: { notIn: ["completed", "failed"] } },
+          data: {
+            status: "failed",
+            error: failedReason || "Redirect check failed",
+            completedAt: new Date(),
+          },
+        }).catch((err) => {
+          console.error(`[redirectCheck] DB update error on failed event for job ${jobId}:`, err);
+        });
+      }
 
-      if (!userRoom) {
-        try {
-          const job = await redirectQueue.getJob(jobId);
-          if (job?.data?.roomId) {
-            userRoom = job.data.roomId;
-          } else if (job?.data?.userId) {
-            userRoom = `user:${job.data.userId}`;
-          } else if (job?.data?.guestId) {
-            userRoom = `guest:${job.data.guestId}`;
-          }
-        } catch (jobErr) {
-          console.error(`[redirectCheck] Error retrieving job ${jobId} on fail:`, jobErr);
+      let userRoom = data?.roomId;
+      let doc = null;
+      if (redirectId && !Number.isNaN(redirectId)) {
+        doc = await prisma.redirectCheck.findFirst({ where: { id: redirectId } }).catch(() => null);
+        if (!userRoom) {
+          userRoom = doc?.roomId || (doc?.userId ? `user:${doc.userId}` : doc?.guestId ? `guest:${doc.guestId}` : null);
         }
       }
 
@@ -131,16 +115,18 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
         return;
       }
 
+      const redirectCheckId = (doc ? doc.id.toString() : (redirectId ? redirectId.toString() : jobId));
+      const errorMsg = doc?.error || failedReason || "Redirect check failed";
       const payload = {
         jobId,
-        redirectCheckId: jobId,
-        recordId: jobId,
+        redirectCheckId,
+        recordId: redirectCheckId,
         roomId: userRoom,
         status: "failed",
-        error: failedReason || "Redirect check failed",
+        error: errorMsg,
         result: {
           status: "failed",
-          error: failedReason || "Redirect check failed",
+          error: errorMsg,
         },
       };
 
@@ -157,6 +143,11 @@ export const handleRedirectQueueEvent = (queueEvent, io) => {
     } catch (err) {
       console.error(`[redirectCheck] Error handling failed event for job ${jobId}:`, err);
     }
+  });
+
+  // Start consuming only after the listeners above are attached
+  queueEvent.start().catch((err) => {
+    console.error("[redirectCheck] Failed to start completion listener:", err);
   });
 };
 

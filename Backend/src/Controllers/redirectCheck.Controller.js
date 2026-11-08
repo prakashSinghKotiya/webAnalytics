@@ -1,6 +1,7 @@
-import { RedirectCheck } from "../Models/redirectCheck.Model.js";
-import { redirectQueue } from "../queue/redirectCheck.Queue.js";
+import { prisma } from "../config/db.prismaSQL.js";
+import { boss, redirectQueueName } from "../queue/redirectCheck.Queue.js";
 import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
+import { resolveServiceRecord } from "../Services/jobIdResolver.Service.js";
 
 export const redirectCheckController = async (req, res) => {
   let record = null;
@@ -38,50 +39,40 @@ export const redirectCheckController = async (req, res) => {
       }
     }
 
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
     // 1. Create DB record with status 'queued'
-    record = await RedirectCheck.create({
-      ...(userId ? { userId } : { guestId }),
-      roomId,
-      url: targetUrl,
-      status: "queued",
+    record = await prisma.redirectCheck.create({
+      data: {
+        ...(userId ? { userId } : { guestId }),
+        roomId,
+        url: targetUrl,
+        status: "queued",
+      },
     });
 
-    const redirectCheckId = record._id.toString();
+    const redirectCheckId = record.id.toString();
 
-    // 2. Add job inside queue
-    const job = await redirectQueue.add(
-      "redirect-queue",
-      {
-        targetUrl,
-        userId,
-        guestId,
-        redirectCheckId,
-        recordId: redirectCheckId,
-        roomId,
-        dbData: record.toObject ? record.toObject() : record,
-      },
-      {
-        jobId: redirectCheckId,
-      }
-    );
+    // 2. Add job inside pg-boss queue
+    const jobId = await boss.send(redirectQueueName, {
+      targetUrl,
+      userId,
+      guestId,
+      redirectCheckId,
+      recordId: redirectCheckId,
+      roomId,
+    });
 
-    if (!job) {
-      await RedirectCheck.findByIdAndDelete(record._id);
-      await releaseGuestDemoReservation(req);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to queue redirect check",
-      });
+    if (!jobId) {
+      throw new Error("Failed to enqueue redirect check job");
     }
 
     return res.status(202).json({
       success: true,
       message: "Redirect check queued",
-      jobId: job.id,
+      jobId,
       redirectCheckId,
       roomId,
       guest: !userId,
@@ -94,8 +85,8 @@ export const redirectCheckController = async (req, res) => {
 
     await releaseGuestDemoReservation(req);
 
-    if (record?._id) {
-      await RedirectCheck.findByIdAndDelete(record._id).catch(() => {});
+    if (record?.id) {
+      await prisma.redirectCheck.delete({ where: { id: record.id } }).catch(() => {});
     }
 
     return res.status(500).json({
@@ -108,28 +99,32 @@ export const redirectCheckController = async (req, res) => {
 
 export const getRedirectCheckResults = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user?.id != null ? Number(req.user.id) : Number(req.user?._id);
     const { page = 1, limit = 20, url, status = "completed" } = req.query;
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
-    const query = { userId };
+    const query = {
+      userId,
+      result: { not: null },
+    };
     if (status) {
       query.status = status;
     }
     if (url) {
-      query.url = { $regex: url.trim(), $options: "i" };
+      query.url = { contains: url.trim(), mode: "insensitive" };
     }
 
     const [results, total] = await Promise.all([
-      RedirectCheck.find(query)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      RedirectCheck.countDocuments(query),
+      prisma.redirectCheck.findMany({
+        where: query,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limitNum,
+      }),
+      prisma.redirectCheck.count({ where: query }),
     ]);
 
     return res.status(200).json({
@@ -154,11 +149,19 @@ export const getRedirectCheckResults = async (req, res) => {
 
 export const getRedirectCheckById = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
+    const redirectId = parseInt(id, 10);
+    if (Number.isNaN(redirectId)) {
+      return res.status(404).json({
+        success: false,
+        message: "Redirect check record not found",
+      });
+    }
+
+    const query = { id: redirectId };
     if (userId) {
       query.userId = userId;
     } else if (guestId) {
@@ -170,7 +173,9 @@ export const getRedirectCheckById = async (req, res) => {
       });
     }
 
-    const result = await RedirectCheck.findOne(query).lean();
+    const result = await prisma.redirectCheck.findFirst({
+      where: query,
+    });
 
     if (!result) {
       return res.status(404).json({
@@ -194,40 +199,42 @@ export const getRedirectCheckById = async (req, res) => {
 
 export const getRedirectCheckStatus = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
-    if (userId) {
-      query.userId = userId;
-    } else if (guestId) {
-      query.guestId = guestId;
-    } else {
+    if (!userId && !guestId) {
       return res.status(401).json({
         success: false,
         message: "Authentication or guest session required",
       });
     }
 
-    const result = await RedirectCheck.findOne(query).lean();
+    const { doc } = await resolveServiceRecord({
+      service: "redirect",
+      id,
+      userId,
+      guestId,
+    });
 
-    if (!result) {
+    if (!doc) {
       return res.status(404).json({
         success: false,
         message: "Redirect check record not found",
       });
     }
 
+    const docIdStr = doc.id.toString();
     return res.status(200).json({
       success: true,
-      jobId: result._id.toString(),
-      redirectCheckId: result._id.toString(),
-      status: result.status,
-      result: result.result,
-      error: result.error || null,
-      createdAt: result.createdAt,
-      completedAt: result.completedAt || null,
+      jobId: docIdStr,
+      redirectCheckId: docIdStr,
+      id: doc.id,
+      status: doc.status,
+      result: doc.result,
+      error: doc.error || null,
+      createdAt: doc.createdAt,
+      completedAt: doc.completedAt || null,
     });
   } catch (error) {
     console.error("getRedirectCheckStatus error:", error);

@@ -1,8 +1,7 @@
-import { whoisLookup } from "../../queue/WhoisLookup.Queue.js";
 import { whoisLookupListener } from "../../queue/whoisLookup.QeventListner.js";
-import { WhoisLookup } from "../../Models/whoisLookup.Model.js";
+import { prisma } from "../../config/db.prismaSQL.js";
 
-// Handling BullMQ queue events when WHOIS lookup jobs complete or fail
+// Handling pg-boss queue events when WHOIS lookup jobs complete or fail
 export const whoisLookupResultHandler = (io) => {
   handleWhoisQueueEvent(whoisLookupListener, io);
 };
@@ -15,49 +14,35 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
     console.error("[whoisLookup] QueueEvents error:", err);
   });
 
-  // Completed job event
+  // Completed job event - result comes straight from the worker's return value
   queueEvent.on("completed", async ({ jobId, returnvalue, returnValue }) => {
     try {
-      let raw = returnvalue || returnValue;
-      let data = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const raw = returnvalue || returnValue;
+      const data = typeof raw === "string" ? JSON.parse(raw) : raw;
 
       if (!data) {
         console.warn(`[whoisLookup] No returnvalue data found for job ${jobId}`);
+        return;
       }
 
-      let userId = data?.userId;
-      let guestId = data?.guestId;
       let userRoom =
-        data?.roomId ||
-        (userId ? `user:${userId}` : guestId ? `guest:${guestId}` : null);
+        data.roomId ||
+        (data.userId ? `user:${data.userId}` : data.guestId ? `guest:${data.guestId}` : null);
 
-      // Fallback to DB document if needed
-      if (!userRoom && jobId) {
-        const doc = await WhoisLookup.findById(jobId).lean();
-        if (doc?.roomId) {
-          userRoom = doc.roomId;
-        } else if (doc?.userId) {
-          userId = doc.userId.toString();
-          userRoom = `user:${userId}`;
-        } else if (doc?.guestId) {
-          guestId = doc.guestId;
-          userRoom = `guest:${guestId}`;
-        }
-      }
-
-      // Final fallback to Redis job
-      if (!userRoom) {
-        try {
-          const job = await whoisLookup.getJob(jobId);
-          if (job?.data?.roomId) {
-            userRoom = job.data.roomId;
-          } else if (job?.data?.userId) {
-            userRoom = `user:${job.data.userId}`;
-          } else if (job?.data?.guestId) {
-            userRoom = `guest:${job.data.guestId}`;
+      // Fallback to DB record if userRoom is missing
+      if (!userRoom && (data.whoisDbId || data.recordId)) {
+        const rawId = (data.whoisDbId || data.recordId).toString();
+        const match = rawId.match(/\d+$/);
+        const id = match ? parseInt(match[0], 10) : null;
+        if (id && !Number.isNaN(id)) {
+          const doc = await prisma.whoisLookup.findFirst({ where: { id } }).catch(() => null);
+          if (doc?.roomId) {
+            userRoom = doc.roomId;
+          } else if (doc?.userId) {
+            userRoom = `user:${doc.userId}`;
+          } else if (doc?.guestId) {
+            userRoom = `guest:${doc.guestId}`;
           }
-        } catch (jobErr) {
-          console.error(`[whoisLookup] Error retrieving job ${jobId} on complete:`, jobErr);
         }
       }
 
@@ -66,14 +51,15 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
         return;
       }
 
+      const whoisDbId = (data.whoisDbId || data.recordId || jobId).toString();
       const payload = {
         jobId,
-        whoisDbId: data?.whoisDbId || data?.recordId || jobId,
-        recordId: data?.recordId || data?.whoisDbId || jobId,
+        whoisDbId,
+        recordId: whoisDbId,
         roomId: userRoom,
-        result: data?.result,
-        status: data?.status || "completed",
-        error: data?.error || null,
+        result: data.result,
+        status: data.status || "completed",
+        error: data.error || null,
       };
 
       const sockets = await io.in(userRoom).fetchSockets();
@@ -92,37 +78,35 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
     }
   });
 
-  // Failed job event
-  queueEvent.on("failed", async ({ jobId, failedReason }) => {
+  // Failed job event - fires once after retries are used up (or job expired)
+  queueEvent.on("failed", async ({ jobId, failedReason, data }) => {
     console.error(`[whoisLookup] Job ${jobId} failed:`, failedReason);
 
     try {
-      const doc = await WhoisLookup.findByIdAndUpdate(
-        jobId,
-        {
-          status: "failed",
-          error: failedReason || "WHOIS lookup failed",
-          completedAt: new Date(),
-        },
-        { new: true }
-      ).lean();
+      const rawId = (data?.whoisDbId || data?.recordId)?.toString();
+      const match = rawId?.match(/\d+$/);
+      const whoisId = match ? parseInt(match[0], 10) : null;
 
-      let userRoom =
-        doc?.roomId ||
-        (doc?.userId ? `user:${doc.userId}` : doc?.guestId ? `guest:${doc.guestId}` : null);
+      if (whoisId && !Number.isNaN(whoisId)) {
+        // Only touches rows that are not already completed/failed (never overwrites a result)
+        await prisma.whoisLookup.updateMany({
+          where: { id: whoisId, status: { notIn: ["completed", "failed"] } },
+          data: {
+            status: "failed",
+            error: failedReason || "WHOIS lookup failed",
+            completedAt: new Date(),
+          },
+        }).catch((err) => {
+          console.error(`[whoisLookup] DB update error on failed event for job ${jobId}:`, err);
+        });
+      }
 
-      if (!userRoom) {
-        try {
-          const job = await whoisLookup.getJob(jobId);
-          if (job?.data?.roomId) {
-            userRoom = job.data.roomId;
-          } else if (job?.data?.userId) {
-            userRoom = `user:${job.data.userId}`;
-          } else if (job?.data?.guestId) {
-            userRoom = `guest:${job.data.guestId}`;
-          }
-        } catch (jobErr) {
-          console.error(`[whoisLookup] Error retrieving job ${jobId} on fail:`, jobErr);
+      let userRoom = data?.roomId;
+      let doc = null;
+      if (whoisId && !Number.isNaN(whoisId)) {
+        doc = await prisma.whoisLookup.findFirst({ where: { id: whoisId } }).catch(() => null);
+        if (!userRoom) {
+          userRoom = doc?.roomId || (doc?.userId ? `user:${doc.userId}` : doc?.guestId ? `guest:${doc.guestId}` : null);
         }
       }
 
@@ -131,16 +115,18 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
         return;
       }
 
+      const whoisDbId = (doc ? doc.id.toString() : (whoisId ? whoisId.toString() : jobId));
+      const errorMsg = doc?.error || failedReason || "WHOIS lookup failed";
       const payload = {
         jobId,
-        whoisDbId: jobId,
-        recordId: jobId,
+        whoisDbId,
+        recordId: whoisDbId,
         roomId: userRoom,
         status: "failed",
-        error: failedReason || "WHOIS lookup failed",
+        error: errorMsg,
         result: {
           status: "failed",
-          error: failedReason || "WHOIS lookup failed",
+          error: errorMsg,
         },
       };
 
@@ -157,6 +143,11 @@ export const handleWhoisQueueEvent = (queueEvent, io) => {
     } catch (err) {
       console.error(`[whoisLookup] Error handling failed event for job ${jobId}:`, err);
     }
+  });
+
+  // Start consuming only after the listeners above are attached
+  queueEvent.start().catch((err) => {
+    console.error("[whoisLookup] Failed to start completion listener:", err);
   });
 };
 

@@ -45,9 +45,18 @@ export const normalizePublicHttpUrl = (value) => {
 export const validateTtfbDemoRequest = (req, res, next) => {
   try {
     req.targetUrl = normalizePublicHttpUrl(req.body?.url);
-    if (!["india", "europe", "usa"].includes(req.body?.region)) {
-      return res.status(400).json({ success: false, error: "Invalid 'region'. Expected india, europe, or usa." });
+    const rawRegion = String(req.body?.region || "").toLowerCase();
+    const regionMap = {
+      india: "india",
+      canada: "canada",
+      singapore: "singapore",
+     
+    };
+    const region = regionMap[rawRegion];
+    if (!region) {
+      return res.status(400).json({ success: false, error: "Invalid 'region'. Expected india, canada, or singapore." });
     }
+    req.body.region = region;
     return next();
   } catch (error) {
     return res.status(400).json({ success: false, error: error.message });

@@ -1,92 +1,132 @@
-import { Worker } from "bullmq";
-import { sharedWorkerRedisConnection } from "../config/redis.js";
 import { checkDnsRecords } from "../Services/dnsRecordtype.Service.js";
-import { DnsRecord } from "../Models/dnsRecord.Model.js";
+import { prisma } from "../config/db.prismaSQL.js";
+import { boss, dnsRecordQueueName } from "../queue/dnsRecordCheck.Queue.js";
 
-export const startDnsWorker = () => {
-  const worker = new Worker(
-    "dnsRecordCheck-queue",
+const CONCURRENCY = Number(process.env.DNS_WORKER_CONCURRENCY) || 10;
+
+export const startDnsWorker = async () => {
+  const workerId = await boss.work(
+    dnsRecordQueueName,
+    {
+      includeMetadata: true, // gives job.retrycount / job.retrylimit
+      teamSize: CONCURRENCY, // fetch up to N jobs per poll
+      teamConcurrency: CONCURRENCY, // run N jobs concurrently
+      teamRefill: true, // refill slots as soon as a job finishes
+      newJobCheckInterval: 500, // ms
+    },
     async (job) => {
       console.log(`Processing DNS record job ${job.id} for:`, job.data);
 
       const { targetUrl, userId, guestId, dnsRecordId, recordId, roomId } = job.data;
-      const dbId = dnsRecordId || recordId;
-      const targetRoomId = roomId || (userId ? `user:${userId}` : guestId ? `guest:${guestId}` : null);
-      console.log("roomid :",targetRoomId)
+      const dbId = dnsRecordId || recordId || job.data?.id;
+      const effectiveUserId = userId != null ? Number(userId) : null;
+      const effectiveGuestId = guestId || null;
+      const targetRoomId =
+        roomId ||
+        (effectiveUserId
+          ? `user:${effectiveUserId}`
+          : effectiveGuestId
+          ? `guest:${effectiveGuestId}`
+          : null);
 
-      if (!targetUrl || !dbId || (!userId && !guestId)) {
+      if (!targetUrl || !dbId || (!effectiveUserId && !effectiveGuestId) || !targetRoomId) {
         throw new Error(
-          `Invalid job data. TargetUrl: ${targetUrl}, dnsRecordId: ${dbId}, actor: ${userId || guestId}`
+          `Invalid job data. TargetUrl: ${targetUrl}, dnsRecordId: ${dbId}, actor: ${effectiveUserId || effectiveGuestId}, roomId: ${targetRoomId}`
         );
+      }
+      console.log(`[dnsRecordCheck] Processing for room: ${targetRoomId}, dbId: ${dbId}`);
+
+      let id = null;
+      if (typeof dbId === "string") {
+        const match = dbId.match(/\d+$/);
+        if (match) id = parseInt(match[0], 10);
+      } else if (typeof dbId === "number") {
+        id = dbId;
       }
 
       try {
-        // Mark as processing in DB
-        await DnsRecord.findByIdAndUpdate(dbId, {
-          status: "processing",
-        });
+        // 1. Mark as processing in DB
+        if (id && !Number.isNaN(id)) {
+          await prisma.dnsRecord.update({
+            where: { id },
+            data: {
+              status: "processing",
+            },
+          }).catch((err) => {
+            if (err.code === "P2025") return null;
+            throw err;
+          });
+        }
 
+        // 2. Perform DNS queries
         const result = await checkDnsRecords(targetUrl);
         console.log(`[dnsRecordCheck] Job ${job.id} result came`);
 
         const isSuccess = Boolean(result && (!result.status || result.status !== "failed"));
+        const errorMessage = isSuccess ? null : (result?.error || "DNS lookup failed");
 
-        // Update MongoDB document with DNS lookup result
-        await DnsRecord.findByIdAndUpdate(dbId, {
-          status: isSuccess ? "completed" : "failed",
-          result,
-          error: isSuccess ? null : (result?.error || "DNS lookup failed"),
-          completedAt: new Date(),
-        });
+        // 3. Update PostgreSQL record with DNS lookup result
+        if (id && !Number.isNaN(id)) {
+          await prisma.dnsRecord.update({
+            where: { id },
+            data: {
+              status: isSuccess ? "completed" : "failed",
+              result,
+              error: errorMessage,
+              completedAt: new Date(),
+            },
+          }).catch((err) => {
+            if (err.code === "P2025") return null;
+            throw err;
+          });
+        }
 
-        console.log(`[dnsRecordCheck] Job ${job.id} completed successfully`);
+        console.log(`[dnsRecordCheck] Job ${job.id} completed successfully with status: ${isSuccess ? "completed" : "failed"}`);
 
+        // Returned value is delivered to the pg-boss completion listener
         return {
           jobId: job.id,
-          userId,
-          guestId,
+          userId: effectiveUserId,
+          guestId: effectiveGuestId,
           roomId: targetRoomId,
-          dnsRecordId: dbId,
+          dnsRecordId: (id ?? dbId).toString(),
           result,
           status: isSuccess ? "completed" : "failed",
+          error: errorMessage,
         };
       } catch (error) {
         console.error(`[dnsRecordCheck] Error processing job ${job.id}:`, error);
 
-        if (dbId) {
+        // Only mark the row failed on the LAST attempt; earlier attempts will be retried
+        const isLastAttempt = job.retrycount >= job.retrylimit;
+        if (isLastAttempt && id && !Number.isNaN(id)) {
           try {
-            await DnsRecord.findByIdAndUpdate(dbId, {
-              status: "failed",
-              error: error.message || "DNS lookup failed",
-              completedAt: new Date(),
+            await prisma.dnsRecord.update({
+              where: { id },
+              data: {
+                status: "failed",
+                error: error.message || "DNS lookup failed",
+                completedAt: new Date(),
+              },
+            }).catch((dbErr) => {
+              if (dbErr.code !== "P2025") {
+                console.error("[dnsRecordCheck] DB update failed on job error:", dbErr);
+              }
             });
           } catch (dbErr) {
             console.error("[dnsRecordCheck] DB update failed on job error:", dbErr);
           }
         }
 
-        throw error;
+        throw error; // pg-boss retries or marks the job failed and emits completion
       }
-    },
-    {
-      connection: sharedWorkerRedisConnection,
-      concurrency: 10,
     }
   );
 
-  worker.on("completed", (job) => {
-    console.log(`[dnsRecordCheck] Job ${job?.id} completed successfully`);
-  });
-
-  worker.on("failed", (job, error) => {
-    console.error(`[dnsRecordCheck] Job ${job?.id} failed:`, error?.message);
-  });
-
-  worker.on("error", (error) => {
-    console.error("[dnsRecordCheck] Worker error:", error?.message);
-  });
-
-  return worker;
+  return {
+    workerId,
+    close: async () => boss.offWork(workerId),
+  };
 };
 
 export default startDnsWorker;

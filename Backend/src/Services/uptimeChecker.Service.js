@@ -507,31 +507,7 @@ const failedResult = (reason, error) =>
     outcome: { ...EMPTY_OUTCOME, status: STATUS.DOWN, reason, error },
   });
 
-/**
- * Checks a URL and always resolves with a result object (never rejects).
- *
- * `reason` is one of: HTTP_OK, HIGH_RESPONSE_TIME, SERVER_ERROR, HTTP_ERROR,
- * KEYWORD_MISMATCH, TIMEOUT, DNS_ERROR, CONNECTION_REFUSED, CONNECTION_RESET,
- * CONNECTION_TIMEOUT, HOST_UNREACHABLE, SSL_ERROR, INVALID_RESPONSE,
- * NETWORK_ERROR, BLOCKED_TARGET, INVALID_URL, ABORTED, INTERNAL_ERROR.
- * Results with reason "ABORTED" should be discarded, not stored.
- *
- * @param {string} targetUrl
- * @param {object} [options]
- * @param {number} [options.timeout=10000]             Hard deadline per attempt (ms)
- * @param {number} [options.degradedThreshold=3000]    Slow-response threshold (ms)
- * @param {number} [options.retries=1]                 Extra attempts on transient failures (0-3)
- * @param {number} [options.retryDelay=500]            Base delay between attempts (ms)
- * @param {"GET"|"HEAD"} [options.method="GET"]
- * @param {0|4|6} [options.ipFamily=0]                 Force IPv4 / IPv6, or auto
- * @param {number[]} [options.acceptedStatusCodes]     Extra codes treated as UP (e.g. 401)
- * @param {string} [options.keyword]                   Body must contain this text (forces GET)
- * @param {boolean} [options.invertKeyword=false]      Body must NOT contain the keyword
- * @param {number} [options.maxBodyBytes=1048576]      Stop reading the body after this size
- * @param {boolean} [options.allowPrivateNetworks=false] Allow private/reserved IP targets
- * @param {Record<string,string|null>} [options.headers] Header overrides (null removes a default)
- * @param {AbortSignal} [options.signal]               Cancel the check (graceful shutdown)
- */
+
 export const checkUrl = async (targetUrl, options = {}) => {
   try {
     const url = parseTarget(targetUrl);

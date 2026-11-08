@@ -5,30 +5,47 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/index.js",
+    "db": "node --env-file=.env src/config/db.prismaSQL.js",
     "dev": "node --env-file=.env src/index.js",
     "worker": "node --watch --no-deprecation --env-file=.env src/Workers/worker.js",
     "worker:all": "node --watch --no-deprecation --env-file=.env src/Workers/worker.js",
-    "worker:ttfb": "node --watch --no-deprecation --env-file=.env src/Workers/ttfbStart.worker.js"
+    "worker:ttfb": "node --watch --no-deprecation --env-file=.env src/Workers/ttfbStart.worker.js",
+    "worker:lighthouse": "node --watch --no-deprecation --env-file=.env src/Workers/lighthouseStart.worker.js",
+    "worker:dns": "node --watch --no-deprecation --env-file=.env src/Workers/dnsStart.worker.js",
+    "worker:uptime": "node --watch --no-deprecation --env-file=.env src/Workers/uptimeStart.worker.js",
+    "worker:redirect": "node --watch --no-deprecation --env-file=.env src/Workers/redirectStart.worker.js",
+    "worker:whois": "node --watch --no-deprecation --env-file=.env src/Workers/whoisStart.worker.js",
+    "admin:provision": "node --env-file=.env src/scripts/provisionSuperAdmin.js",
+    "seed:runners": "node --env-file=.env src/scripts/seedRunners.js",
+    "test": "node --env-file=.env --test test/superAdmin.test.js test/uptimeBatch.test.js test/adminRunnersApi.test.js test/userRunnerIsolation.test.js",
+    "test:uptime": "node --env-file=.env --test test/uptimeBatch.test.js"
   },
   "dependencies": {
+    "@aws-sdk/client-lambda": "^3.1161.0",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "bcrypt": "^6.0.0",
-    "bullmq": "^6.3.4",
     "cookie": "^2.0.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dns-packet": "^5.6.1",
     "dompurify": "^3.4.15",
+    "dotenv": "^18.0.9",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
     "express-slow-down": "^3.1.1",
     "google-auth-library": "^11.3.1",
-    "ioredis": "^6.0.0",
     "it": "^1.1.1",
     "jsdom": "^29.1.1",
     "mongoose": "^9.9.4",
     "nodemailer": "^10.0.10",
+    "pg": "^8.23.1",
+    "pg-boss": "^8.4.2",
     "socket.io": "^4.8.3",
     "tldts": "^7.4.15",
     "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "prisma": "^7.10.1"
   }
 }

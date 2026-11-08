@@ -1,10 +1,7 @@
 import express from 'express';
 import cors from 'cors';
-import mongoose from 'mongoose';
 import cookieParser from 'cookie-parser';
-
-import { connectdb } from './config/db.mongoose.js';
-import { sharedRedisConnection } from './config/redis.js';
+import { boss } from './queue/boss.js';
 import { initializeGuestDemo, optionalActor } from './Middleware/guestDemo.Mw.js';
 import checkAuth from './Middleware/authentication.Mw.js';
 import { startallworkers } from './Workers/worker.js';
@@ -19,25 +16,23 @@ import DnsRecordRoutes from './Routes/dnsRecord.Routes.js';
 import RedirectCheckRoutes from './Routes/redirectCheck.Routes.js';
 import WhoisLookupRoutes from './Routes/whoisLookup.Routes.js';
 
-import { Ttfb } from './Models/Ttfb.Model.js';
-import { Lighthouse } from './Models/Lighthouse.Model.js';
-import { DnsRecord } from './Models/dnsRecord.Model.js';
-import { RedirectCheck } from './Models/redirectCheck.Model.js';
-import { WhoisLookup } from './Models/whoisLookup.Model.js';
-// import { getDomainHostingInfo } from './Controllers/uptimeRobot.Controller.js';
-// import { checkUrl } from './Services/uptimeChecker.Service.js';
+import { connectprismaSQLdb, prisma } from './config/db.prismaSQL.js';
+import { resolveServiceRecord } from './Services/jobIdResolver.Service.js';
 
 
 
 
 try {
-  await connectdb();
+ // await connectdb();
+  await connectprismaSQLdb()
   console.log("Database connected successfully.");
 } catch (err) {
   console.error("Database connection failed: ", err);
 }
 
-startallworkers();
+if (process.env.START_WORKERS_IN_SERVER !== "false") {
+  startallworkers();
+}
 
 export const app = express();
 app.set('trust proxy', 1);
@@ -95,9 +90,9 @@ app.get('/', (req, res) => {
 // app.post('/demo-uptime', async (req, res) => {
 //   const{url}= req.body
 //   let parsedUrl = new URL(url);
-//   const hsotinginfo = await getDomainHostingInfo(parsedUrl.hostname)
-//     const result = await checkUrl(url)
-//   res.json({result,hsotinginfo})
+//   const hsotinginfo = await measureTTFB(parsedUrl)
+//     //const result = await checkUrl(url)
+//   res.json({hsotinginfo})
 // });
 
 
@@ -106,23 +101,31 @@ app.get('/', (req, res) => {
 // Demo Infrastructure Health Check
 app.get('/demo/health', async (req, res) => {
   const io = req.app.get('io');
-  let redisStatus = sharedRedisConnection.status;
-  let redisPing = false;
+
+  let postgresConnected = false;
   try {
-    const pong = await sharedRedisConnection.ping();
-    redisPing = pong === 'PONG';
-  } catch (err) {
-    console.error("[HealthCheck] Redis ping error:", err.message);
+    await prisma.$queryRaw`SELECT 1`;
+    postgresConnected = true;
+  } catch (dbErr) {
+    console.error("[HealthCheck] PostgreSQL ping error:", dbErr.message);
+  }
+
+  let pgbossConnected = false;
+  try {
+    await boss.getSchedules();
+    pgbossConnected = true;
+  } catch (bossErr) {
+    console.error("[HealthCheck] pg-boss check error:", bossErr.message);
   }
 
   res.status(200).json({
-    status: 'healthy',
+    status: postgresConnected && pgbossConnected ? 'healthy' : 'degraded',
     uptimeSeconds: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
     services: ['ttfb', 'lighthouse', 'dns', 'redirect', 'whois', 'uptime'],
     database: {
-      mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-      redis: redisPing ? 'connected' : redisStatus,
+      postgresql: postgresConnected ? 'connected' : 'disconnected',
+      pgboss: pgbossConnected ? 'connected' : 'disconnected',
     },
     sockets: {
       connectedClients: io ? io.engine?.clientsCount || 0 : 0,
@@ -138,10 +141,11 @@ app.use("/admin", AdminRoutes);
 app.post('/demo/session', initializeGuestDemo);
 
 // Unified fallback status polling endpoint (usable by both guest and authenticated users)
+// Resilient to both PostgreSQL integer primary keys and pg-boss job UUIDs.
 app.get('/demo/status/:service/:id', optionalActor, async (req, res) => {
   try {
     const { service, id } = req.params;
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
 
     if (!userId && !guestId) {
@@ -151,36 +155,18 @@ app.get('/demo/status/:service/:id', optionalActor, async (req, res) => {
       });
     }
 
-    const query = { _id: id };
-    if (userId) {
-      query.userId = userId;
-    } else {
-      query.guestId = guestId;
-    }
+    const { doc, service: resolvedService, dbIdKey, error } = await resolveServiceRecord({
+      service,
+      id,
+      userId,
+      guestId,
+    });
 
-    let doc = null;
-    switch (service.toLowerCase()) {
-      case 'ttfb':
-        doc = await Ttfb.findOne(query).lean();
-        break;
-      case 'lighthouse':
-        doc = await Lighthouse.findOne(query).lean();
-        break;
-      case 'dns':
-      case 'dnsrecord':
-        doc = await DnsRecord.findOne(query).lean();
-        break;
-      case 'redirect':
-        doc = await RedirectCheck.findOne(query).lean();
-        break;
-      case 'whois':
-        doc = await WhoisLookup.findOne(query).lean();
-        break;
-      default:
-        return res.status(400).json({
-          success: false,
-          error: `Invalid service '${service}'. Expected one of: ttfb, lighthouse, dns, redirect, whois`,
-        });
+    if (error === "invalid_service") {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid service '${service}'. Expected one of: ttfb, lighthouse, dns, redirect, whois`,
+      });
     }
 
     if (!doc) {
@@ -190,15 +176,20 @@ app.get('/demo/status/:service/:id', optionalActor, async (req, res) => {
       });
     }
 
+    const docIdStr = doc.id.toString();
     return res.status(200).json({
       success: true,
-      service: service.toLowerCase(),
-      jobId: doc._id.toString(),
+      service: resolvedService,
+      jobId: docIdStr,
+      id: doc.id,
+      ...(dbIdKey ? { [dbIdKey]: docIdStr } : {}),
       status: doc.status,
       result: doc.result || null,
       error: doc.error || null,
       createdAt: doc.createdAt,
       completedAt: doc.completedAt || null,
+      ...(doc.region ? { region: doc.region } : {}),
+      ...(doc.strategy ? { strategy: doc.strategy } : {}),
     });
   } catch (err) {
     console.error("[demo/status] Error fetching status:", err);

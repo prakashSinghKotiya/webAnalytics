@@ -29,6 +29,11 @@ import {
     adminBulkUpdateInterval,
     adminGetMonitorIncidents,
     adminExportMonitors,
+    adminGetRunners,
+    adminCreateRunner,
+    adminActivateRunner,
+    adminTestRunner,
+    adminDeleteRunner,
 } from "../Controllers/uptimeRobot.Controller.js";
 
 const router = express.Router();
@@ -82,5 +87,12 @@ router.post("/admin/delete/:id", isAdmin, adminDeleteMonitor);
 
 router.delete("/admin/monitor/:id/results", isAdmin, adminClearMonitorResults);
 router.post("/admin/monitor/:id/results/clear", isAdmin, adminClearMonitorResults);
+
+// Uptime runner management
+router.get("/admin/runners", adminChecker, adminGetRunners);
+router.post("/admin/runners", isAdmin, adminCreateRunner);
+router.put("/admin/runners/:id/activate", isAdmin, adminActivateRunner);
+router.post("/admin/runners/:id/test", adminChecker, adminTestRunner);
+router.delete("/admin/runners/:id", isAdmin, adminDeleteRunner);
 
 export default router;

@@ -1,7 +1,8 @@
-import { DnsRecord } from "../Models/dnsRecord.Model.js";
-import { dnsRecordCheck } from "../queue/dnsRecordCheck.Queue.js";
+import { prisma } from "../config/db.prismaSQL.js";
+import { boss, dnsRecordQueueName } from "../queue/dnsRecordCheck.Queue.js";
 import { normalizeHostname, DnsServiceError } from "../Services/dnsRecordtype.Service.js";
 import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
+import { resolveServiceRecord } from "../Services/jobIdResolver.Service.js";
 
 export const dnsRecordLookup = async (req, res) => {
   let record = null;
@@ -25,39 +26,37 @@ export const dnsRecordLookup = async (req, res) => {
       }
     }
 
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
 
     // 1. Create DB record with status 'queued'
-    record = await DnsRecord.create({
-      ...(userId ? { userId } : { guestId }),
-      roomId,
-      url: hostname,
-      status: "queued",
+    record = await prisma.dnsRecord.create({
+      data: {
+        ...(userId ? { userId } : { guestId }),
+        roomId,
+        url: hostname,
+        status: "queued",
+      },
     });
 
-    const dnsRecordId = record._id.toString();
+    const dnsRecordId = record.id.toString();
 
-    // 2. Add job to queue
-    const job = await dnsRecordCheck.add(
-      "check-dns-records",
-      {
-        targetUrl: hostname,
-        userId,
-        guestId,
-        dnsRecordId,
-        roomId,
-      },
-      {
-        jobId: dnsRecordId,
-      }
-    );
+    // 2. pg-boss generates the job id (UUID); the PostgreSQL record id travels in the job data
+    const jobId = await boss.send(dnsRecordQueueName, {
+      targetUrl: hostname,
+      userId,
+      guestId,
+      dnsRecordId,
+      roomId,
+    });
+
+    if (!jobId) throw new Error("Failed to enqueue DNS record check job");
 
     return res.status(202).json({
       success: true,
       message: "DNS record lookup started",
-      jobId: job.id,
+      jobId,
       dnsRecordId,
       roomId,
       guest: !userId,
@@ -71,8 +70,8 @@ export const dnsRecordLookup = async (req, res) => {
     await releaseGuestDemoReservation(req);
 
     // Rollback created document if queue addition failed
-    if (record?._id) {
-      await DnsRecord.findByIdAndDelete(record._id).catch(() => {});
+    if (record?.id) {
+      await prisma.dnsRecord.delete({ where: { id: record.id } }).catch(() => {});
     }
 
     return res.status(500).json({
@@ -85,7 +84,7 @@ export const dnsRecordLookup = async (req, res) => {
 
 export const getDnsRecordResults = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user?.id != null ? Number(req.user.id) : Number(req.user?._id);
     const {
       page = 1,
       limit = 20,
@@ -99,7 +98,7 @@ export const getDnsRecordResults = async (req, res) => {
 
     const query = {
       userId,
-      result: { $ne: null },
+      result: { not: null },
     };
 
     if (status) {
@@ -107,16 +106,17 @@ export const getDnsRecordResults = async (req, res) => {
     }
 
     if (url) {
-      query.url = { $regex: url.trim(), $options: "i" };
+      query.url = { contains: url.trim(), mode: "insensitive" };
     }
 
     const [results, total] = await Promise.all([
-      DnsRecord.find(query)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      DnsRecord.countDocuments(query),
+      prisma.dnsRecord.findMany({
+        where: query,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limitNum,
+      }),
+      prisma.dnsRecord.count({ where: query }),
     ]);
 
     return res.status(200).json({
@@ -140,11 +140,19 @@ export const getDnsRecordResults = async (req, res) => {
 
 export const getDnsRecordById = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
+    const dnsId = parseInt(id, 10);
+    if (Number.isNaN(dnsId)) {
+      return res.status(404).json({
+        success: false,
+        message: "DNS record not found",
+      });
+    }
+
+    const query = { id: dnsId };
     if (userId) {
       query.userId = userId;
     } else if (guestId) {
@@ -156,7 +164,9 @@ export const getDnsRecordById = async (req, res) => {
       });
     }
 
-    const result = await DnsRecord.findOne(query).lean();
+    const result = await prisma.dnsRecord.findFirst({
+      where: query,
+    });
 
     if (!result) {
       return res.status(404).json({
@@ -180,40 +190,42 @@ export const getDnsRecordById = async (req, res) => {
 
 export const getDnsRecordStatus = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
-    if (userId) {
-      query.userId = userId;
-    } else if (guestId) {
-      query.guestId = guestId;
-    } else {
+    if (!userId && !guestId) {
       return res.status(401).json({
         success: false,
         message: "Authentication or guest session required",
       });
     }
 
-    const result = await DnsRecord.findOne(query).lean();
+    const { doc } = await resolveServiceRecord({
+      service: "dns",
+      id,
+      userId,
+      guestId,
+    });
 
-    if (!result) {
+    if (!doc) {
       return res.status(404).json({
         success: false,
         message: "DNS record not found",
       });
     }
 
+    const docIdStr = doc.id.toString();
     return res.status(200).json({
       success: true,
-      jobId: result._id.toString(),
-      dnsRecordId: result._id.toString(),
-      status: result.status,
-      result: result.result,
-      error: result.error || null,
-      createdAt: result.createdAt,
-      completedAt: result.completedAt || null,
+      jobId: docIdStr,
+      dnsRecordId: docIdStr,
+      id: doc.id,
+      status: doc.status,
+      result: doc.result,
+      error: doc.error || null,
+      createdAt: doc.createdAt,
+      completedAt: doc.completedAt || null,
     });
   } catch (error) {
     console.error("getDnsRecordStatus error:", error);

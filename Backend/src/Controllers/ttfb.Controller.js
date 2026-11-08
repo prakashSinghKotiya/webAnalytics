@@ -1,21 +1,22 @@
-import { Ttfb } from "../Models/Ttfb.Model.js";
-import { europeTtfbQueue, indiaTtfbQueue, usaTtfbQueue } from "../queue/ttfb.queue.js";
+import { prisma } from "../config/db.prismaSQL.js";
+import { boss,  ttfbQueues, } from "../queue/ttfb.queue.js";
 import { normalizePublicHttpUrl } from "../Services/publicUrl.Service.js";
 import { releaseGuestDemoReservation } from "../Middleware/guestDemoUsage.Mw.js";
+import { resolveServiceRecord } from "../Services/jobIdResolver.Service.js";
 
-const queue = {
-  india: indiaTtfbQueue,
-  europe: europeTtfbQueue,
-  usa: usaTtfbQueue,
-};
+
+
+const queue = ttfbQueues; // { india: "ttfb-india", europe: "ttfb-europe", usa: "ttfb-usa" }
+
+
 
 export const ttfbFinder = async (req, res) => {
   let ttfbDb = null;
   try {
     const { region } = req.body;
-
+ 
     const url = req.targetUrl || normalizePublicHttpUrl(req.body.url);
-
+ 
     const workerQueue = queue[region];
     if (!workerQueue) {
       return res.status(400).json({
@@ -23,42 +24,39 @@ export const ttfbFinder = async (req, res) => {
         error: `Invalid 'region'. Expected one of: ${Object.keys(queue).join(", ")}`,
       });
     }
-
-    const userId = req.user?._id?.toString();
+ 
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
-
+ 
     // Create DB record first with status 'queued'
-    ttfbDb = await Ttfb.create({
-      ...(userId ? { userId } : { guestId }),
-      roomId,
-      url,
-      region,
-      status: "queued",
-    });
-
-    const ttfbdbId = ttfbDb._id.toString();
-
-    // Use MongoDB document ID as BullMQ job ID
-    const job = await workerQueue.add(
-      "measure-ttfb",
-      {
-        targetUrl: url,
-        userId,
-        guestId,
-        ttfbdbId,
-        region,
+    ttfbDb = await prisma.ttfb.create({
+      data: {
+        ...(userId ? { userId } : { guestId }),
         roomId,
+        url,
+        region,
+        status: "queued",
       },
-      {
-        jobId: ttfbdbId,
-      }
-    );
-
+    });
+ 
+    const ttfbdbId = ttfbDb.id.toString();
+ 
+    // pg-boss generates the job id (UUID); the PostgreSQL record id travels in the job data
+    const jobId = await boss.send(workerQueue, {
+      targetUrl: url,
+      userId,
+      guestId,
+      ttfbdbId,
+      region,
+      roomId,
+    });
+    if (!jobId) throw new Error("Failed to enqueue TTFB job");
+ 
     return res.status(202).json({
       success: true,
       message: "TTFB analysis started",
-      jobId: job.id,
+      jobId,
       ttfbdbId,
       region,
       roomId,
@@ -69,11 +67,11 @@ export const ttfbFinder = async (req, res) => {
   } catch (error) {
     console.error("ttfbFinder error:", error);
     await releaseGuestDemoReservation(req);
-
-    if (ttfbDb?._id) {
-      await Ttfb.findByIdAndDelete(ttfbDb._id).catch(() => {});
+ 
+    if (ttfbDb?.id) {
+      await prisma.ttfb.delete({ where: { id: ttfbDb.id } }).catch(() => {});
     }
-
+ 
     return res.status(500).json({
       success: false,
       message: "Failed to create TTFB job",
@@ -81,12 +79,12 @@ export const ttfbFinder = async (req, res) => {
     });
   }
 };
-
+ 
 export const allRegionttfbFinder = async (req, res) => {
   let insertedDocs = [];
   try {
     const { region } = req.body;
-
+ 
     // Basic validation
     if (!req.body.url) {
       return res.status(400).json({
@@ -94,21 +92,21 @@ export const allRegionttfbFinder = async (req, res) => {
         error: "Missing 'url' in request body",
       });
     }
-
+ 
     if (region !== "All") {
       return res.status(400).json({
         success: false,
         error: "Invalid 'region'. Expected 'All'",
       });
     }
-
+ 
     const targetUrl = normalizePublicHttpUrl(req.body.url);
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
     const regionNames = Object.keys(queue);
-
-    // 1. Batch insert DB documents using insertMany in a single round-trip
+ 
+    // 1. Batch insert DB documents using createManyAndReturn in a single round-trip
     const docsToInsert = regionNames.map((regionName) => ({
       ...(userId ? { userId } : { guestId }),
       roomId,
@@ -116,39 +114,36 @@ export const allRegionttfbFinder = async (req, res) => {
       region: regionName,
       status: "queued",
     }));
-
-    insertedDocs = await Ttfb.insertMany(docsToInsert);
-
-    // 2. Add jobs concurrently to each respective regional queue sharing the redis connection
+ 
+    insertedDocs = await prisma.ttfb.createManyAndReturn({
+      data: docsToInsert,
+    });
+ 
+    // 2. Add jobs concurrently to each respective regional queue
     const jobs = await Promise.all(
       insertedDocs.map(async (doc) => {
-        const ttfbdbId = doc._id.toString();
+        const ttfbdbId = doc.id.toString();
         const regionName = doc.region;
         const workerQueue = queue[regionName];
-
-        const job = await workerQueue.add(
-          "measure-ttfb-all",
-          {
-            targetUrl,
-            userId,
-            guestId,
-            ttfbdbId,
-            region: regionName,
-            roomId,
-          },
-          {
-            jobId: ttfbdbId,
-          }
-        );
-
+ 
+        const jobId = await boss.send(workerQueue, {
+          targetUrl,
+          userId,
+          guestId,
+          ttfbdbId,
+          region: regionName,
+          roomId,
+        });
+        if (!jobId) throw new Error(`Failed to enqueue TTFB job for ${regionName}`);
+ 
         return {
-          jobId: job.id,
+          jobId,
           ttfbdbId,
           region: regionName,
         };
       })
     );
-
+ 
     return res.status(202).json({
       success: true,
       message: "TTFB analysis started",
@@ -161,13 +156,15 @@ export const allRegionttfbFinder = async (req, res) => {
     });
   } catch (error) {
     console.error("allRegionttfbFinder error:", error);
-
+ 
     await releaseGuestDemoReservation(req);
-
+ 
     if (insertedDocs.length) {
-      await Ttfb.deleteMany({ _id: { $in: insertedDocs.map((d) => d._id) } }).catch(() => {});
+      await prisma.ttfb
+        .deleteMany({ where: { id: { in: insertedDocs.map((d) => d.id) } } })
+        .catch(() => {});
     }
-
+ 
     return res.status(500).json({
       success: false,
       message: "Failed to create TTFB jobs",
@@ -175,10 +172,187 @@ export const allRegionttfbFinder = async (req, res) => {
     });
   }
 };
+ 
+
+
+
+
+// export const ttfbFinder = async (req, res) => {
+//   let ttfbDb = null;
+//   try {
+//     const { region } = req.body;
+
+//     const url = req.targetUrl || normalizePublicHttpUrl(req.body.url);
+
+//     const workerQueue = queue[region];
+//     if (!workerQueue) {
+//       return res.status(400).json({
+//         success: false,
+//         error: `Invalid 'region'. Expected one of: ${Object.keys(queue).join(", ")}`,
+//       });
+//     }
+
+//     const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
+//     const guestId = req.guestId;
+//     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
+
+//     // Create DB record first with status 'queued'
+//     ttfbDb = await prisma.ttfb.create({
+//       data: {
+//         ...(userId ? { userId } : { guestId }),
+//         roomId,
+//         url,
+//         region,
+//         status: "queued",
+//       },
+//     });
+
+//     const ttfbdbId = ttfbDb.id.toString();
+
+//     // Use PostgreSQL record ID as BullMQ job ID
+//     const job = await workerQueue.add(
+//       "measure-ttfb",
+//       {
+//         targetUrl: url,
+//         userId,
+//         guestId,
+//         ttfbdbId,
+//         region,
+//         roomId,
+//       },
+//       {
+//         jobId: `ttfb-${ttfbdbId}` ,
+//       }
+//     );
+
+//     return res.status(202).json({
+//       success: true,
+//       message: "TTFB analysis started",
+//       jobId: job.id,
+//       ttfbdbId,
+//       region,
+//       roomId,
+//       guest: !userId,
+//       remaining: userId ? undefined : req.guestDemoRemaining,
+//       totalLimit: userId ? undefined : req.guestDemoTotalLimit,
+//     });
+//   } catch (error) {
+//     console.error("ttfbFinder error:", error);
+//     await releaseGuestDemoReservation(req);
+
+//     if (ttfbDb?.id) {
+//       await prisma.ttfb.delete({ where: { id: ttfbDb.id } }).catch(() => {});
+//     }
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to create TTFB job",
+//       error: error.message,
+//     });
+//   }
+// };
+
+// export const allRegionttfbFinder = async (req, res) => {
+//   let insertedDocs = [];
+//   try {
+//     const { region } = req.body;
+
+//     // Basic validation
+//     if (!req.body.url) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "Missing 'url' in request body",
+//       });
+//     }
+
+//     if (region !== "All") {
+//       return res.status(400).json({
+//         success: false,
+//         error: "Invalid 'region'. Expected 'All'",
+//       });
+//     }
+
+//     const targetUrl = normalizePublicHttpUrl(req.body.url);
+//     const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
+//     const guestId = req.guestId;
+//     const roomId = userId ? `user:${userId}` : `guest:${guestId}`;
+//     const regionNames = Object.keys(queue);
+
+//     // 1. Batch insert DB documents using createManyAndReturn in a single round-trip
+//     const docsToInsert = regionNames.map((regionName) => ({
+//       ...(userId ? { userId } : { guestId }),
+//       roomId,
+//       url: targetUrl,
+//       region: regionName,
+//       status: "queued",
+//     }));
+
+//     insertedDocs = await prisma.ttfb.createManyAndReturn({
+//       data: docsToInsert,
+//     });
+
+//     // 2. Add jobs concurrently to each respective regional queue sharing the redis connection
+//     const jobs = await Promise.all(
+//       insertedDocs.map(async (doc) => {
+//         const ttfbdbId = doc.id.toString();
+//         const regionName = doc.region;
+//         const workerQueue = queue[regionName];
+
+//         const job = await workerQueue.add(
+//           "measure-ttfb-all",
+//           {
+//             targetUrl,
+//             userId,
+//             guestId,
+//             ttfbdbId,
+//             region: regionName,
+//             roomId,
+//           },
+//           {
+//             jobId: `ttfb-${ttfbdbId}` ,
+//           }
+//         );
+
+//         return {
+//           jobId: job.id,
+//           ttfbdbId,
+//           region: regionName,
+//         };
+//       })
+//     );
+
+//     return res.status(202).json({
+//       success: true,
+//       message: "TTFB analysis started",
+//       region: "All",
+//       roomId,
+//       jobs,
+//       guest: !userId,
+//       remaining: userId ? undefined : req.guestDemoRemaining,
+//       totalLimit: userId ? undefined : req.guestDemoTotalLimit,
+//     });
+//   } catch (error) {
+//     console.error("allRegionttfbFinder error:", error);
+
+//     await releaseGuestDemoReservation(req);
+
+//     if (insertedDocs.length) {
+//       await prisma.ttfb
+//         .deleteMany({ where: { id: { in: insertedDocs.map((d) => d.id) } } })
+//         .catch(() => {});
+//     }
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to create TTFB jobs",
+//       error: error.message,
+//     });
+//   }
+// };
 
 export const getTtfbResults = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const {
       page = 1,
       limit = 20,
@@ -194,7 +368,7 @@ export const getTtfbResults = async (req, res) => {
     // Filter by user and ensure result exists
     const query = {
       userId,
-      result: { $ne: null },
+      result: { not: null },
     };
 
     if (status) {
@@ -206,16 +380,17 @@ export const getTtfbResults = async (req, res) => {
     }
 
     if (url) {
-      query.url = { $regex: url.trim(), $options: "i" };
+      query.url = { contains: url.trim(), mode: "insensitive" };
     }
 
     const [results, total] = await Promise.all([
-      Ttfb.find(query)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Ttfb.countDocuments(query),
+      prisma.ttfb.findMany({
+        where: query,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limitNum,
+      }),
+      prisma.ttfb.count({ where: query }),
     ]);
 
     return res.status(200).json({
@@ -239,11 +414,19 @@ export const getTtfbResults = async (req, res) => {
 
 export const getTtfbById = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
+    const ttfbId = parseInt(id, 10);
+    if (Number.isNaN(ttfbId)) {
+      return res.status(404).json({
+        success: false,
+        message: "TTFB record not found",
+      });
+    }
+
+    const query = { id: ttfbId };
     if (userId) {
       query.userId = userId;
     } else if (guestId) {
@@ -255,7 +438,9 @@ export const getTtfbById = async (req, res) => {
       });
     }
 
-    const result = await Ttfb.findOne(query).lean();
+    const result = await prisma.ttfb.findFirst({
+      where: query,
+    });
 
     if (!result) {
       return res.status(404).json({
@@ -279,41 +464,43 @@ export const getTtfbById = async (req, res) => {
 
 export const getTtfbStatus = async (req, res) => {
   try {
-    const userId = req.user?._id?.toString();
+    const userId = req.user?.id != null ? Number(req.user.id) : (req.user?._id != null ? Number(req.user._id) : undefined);
     const guestId = req.guestId;
     const { id } = req.params;
 
-    const query = { _id: id };
-    if (userId) {
-      query.userId = userId;
-    } else if (guestId) {
-      query.guestId = guestId;
-    } else {
+    if (!userId && !guestId) {
       return res.status(401).json({
         success: false,
         message: "Authentication or guest session required",
       });
     }
 
-    const result = await Ttfb.findOne(query).lean();
+    const { doc } = await resolveServiceRecord({
+      service: "ttfb",
+      id,
+      userId,
+      guestId,
+    });
 
-    if (!result) {
+    if (!doc) {
       return res.status(404).json({
         success: false,
         message: "TTFB record not found",
       });
     }
 
+    const docIdStr = doc.id.toString();
     return res.status(200).json({
       success: true,
-      jobId: result._id.toString(),
-      ttfbdbId: result._id.toString(),
-      status: result.status,
-      region: result.region,
-      result: result.result,
-      error: result.error || null,
-      createdAt: result.createdAt,
-      completedAt: result.completedAt || null,
+      jobId: docIdStr,
+      ttfbdbId: docIdStr,
+      id: doc.id,
+      status: doc.status,
+      region: doc.region,
+      result: doc.result,
+      error: doc.error || null,
+      createdAt: doc.createdAt,
+      completedAt: doc.completedAt || null,
     });
   } catch (error) {
     console.error("getTtfbStatus error:", error);

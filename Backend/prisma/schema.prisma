@@ -1,0 +1,376 @@
+// =============================================================================
+// schema.prisma (PostgreSQL) - migrated from MongoDB / Mongoose
+//
+// Prisma 7: the datasource URL lives in the Prisma config file
+// (DATABASE_URL), NOT in this block. Do not add `url = env(...)` here.
+//
+// Mongo TTL indexes do not exist in Postgres. Retention is handled by the
+// `cleanup_expired_rows()` procedure in migration.sql. Schedule it.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum Role {
+  User
+  Admin
+  SuperAdmin
+}
+
+enum Plan {
+  free
+  pro
+}
+
+enum Region {
+  india
+  canada
+  singapore
+}
+
+// Shared lifecycle for all async check jobs (ttfb, dns, whois, redirect, lighthouse).
+enum JobStatus {
+  queued
+  processing
+  completed
+  failed
+}
+
+enum LighthouseStrategy {
+  mobile
+  desktop
+  both
+}
+
+// Prisma enum names cannot start with a digit; @map keeps the exact Mongo
+// values ("1m", "5m", ...) in the database.
+enum MonitorInterval {
+  m1  @map("1m")
+  m5  @map("5m")
+  m10 @map("10m")
+  m15 @map("15m")
+  m30 @map("30m")
+  h1  @map("1h")
+}
+
+enum MonitorStatus {
+  active
+  paused
+}
+
+enum DemoService {
+  ttfb
+  lighthouse
+  whois
+  dns
+  redirect
+}
+
+enum RunnerType {
+  local
+  lambda
+  http
+}
+
+// -----------------------------------------------------------------------------
+// AUTH / USER
+// -----------------------------------------------------------------------------
+
+// Soft delete: set `deleted = true` and filter on it in queries.
+// Hard-deleting a user (e.g. a GDPR erasure request) intentionally cascades to
+// everything they own. Normal "delete account" flows should use the soft flag.
+// Always lowercase + trim `email` before writing (validate with zod).
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique @db.VarChar(320)
+  password  String?
+  picture   String   @default("https://static.vecteezy.com/system/resources/previews/002/318/271/non_2x/user-profile-icon-free-vector.jpg")
+  role      Role     @default(User)
+  plans     Plan     @default(free)
+  deleted   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  sessions       Session[]
+  ttfbs          Ttfb[]
+  dnsRecords     DnsRecord[]
+  whoisLookups   WhoisLookup[]
+  redirectChecks RedirectCheck[]
+  lighthouses    Lighthouse[]
+  uptimeMonitors UptimeMonitor[]
+  uptimeResults  UptimeResult[]
+  roleAuditsPerformed RoleAuditLog[] @relation("RoleAuditActor")
+  roleAuditsReceived  RoleAuditLog[] @relation("RoleAuditTarget")
+}
+
+// RETENTION: 7 days. `id` is the opaque session token (was the Mongo _id).
+// Always validate `expiresAt > now()` when looking a session up.
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime @default(dbgenerated("(now() + interval '7 days')"))
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// RETENTION: 10 minutes. One live OTP per email (re-send = upsert).
+// Store only a hash (e.g. HMAC-SHA256 with a server secret), never the raw code.
+// On verify: reject if expiresAt <= now() or attempts >= 5, increment `attempts`
+// on every wrong guess, delete the row on success.
+model OTP {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique @db.VarChar(320)
+  otp   String
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+  expiresAt DateTime @default(dbgenerated("(now() + interval '10 minutes')"))
+
+  @@index([expiresAt])
+}
+
+// -----------------------------------------------------------------------------
+// ASYNC CHECK JOBS (user OR guest owned, grouped by socket roomId)
+// RETENTION for all five: 1 day.
+// `result` is JSON: stringify Dates / ObjectIds before writing.
+// Trim `url` at the app layer (Mongoose `trim: true` has no DB equivalent).
+// -----------------------------------------------------------------------------
+
+model Ttfb {
+  id          Int       @id @default(autoincrement())
+  userId      Int?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guestId     String?   @db.VarChar(255)
+  roomId      String    @db.VarChar(255)
+  url         String    @db.VarChar(2048)
+  region      Region
+  status      JobStatus @default(queued)
+  result      Json?
+  error       String?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([guestId, createdAt(sort: Desc)])
+  @@index([roomId])
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+model DnsRecord {
+  id          Int       @id @default(autoincrement())
+  userId      Int?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guestId     String?   @db.VarChar(255)
+  roomId      String    @db.VarChar(255)
+  url         String    @db.VarChar(2048)
+  status      JobStatus @default(queued)
+  result      Json?
+  error       String?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([guestId, createdAt(sort: Desc)])
+  @@index([roomId])
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+model WhoisLookup {
+  id          Int       @id @default(autoincrement())
+  userId      Int?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guestId     String?   @db.VarChar(255)
+  roomId      String    @db.VarChar(255)
+  url         String    @db.VarChar(2048)
+  status      JobStatus @default(queued)
+  result      Json?
+  error       String?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([guestId, createdAt(sort: Desc)])
+  @@index([roomId])
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+model RedirectCheck {
+  id          Int       @id @default(autoincrement())
+  userId      Int?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guestId     String?   @db.VarChar(255)
+  roomId      String    @db.VarChar(255)
+  url         String    @db.VarChar(2048)
+  status      JobStatus @default(queued)
+  result      Json?
+  error       String?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([guestId, createdAt(sort: Desc)])
+  @@index([roomId])
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+model Lighthouse {
+  id          Int                @id @default(autoincrement())
+  userId      Int?
+  user        User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  guestId     String?            @db.VarChar(255)
+  roomId      String             @db.VarChar(255)
+  url         String             @db.VarChar(2048)
+  strategy    LighthouseStrategy @default(mobile)
+  status      JobStatus          @default(queued)
+  data        String?
+  result      Json?
+  error       String?
+  completedAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([guestId, createdAt(sort: Desc)])
+  @@index([roomId])
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// UPTIME MONITORING
+// -----------------------------------------------------------------------------
+
+model UptimeMonitor {
+  id            Int             @id @default(autoincrement())
+  userId        Int
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url           String          @db.VarChar(2048)
+  interval      MonitorInterval @default(m5)
+  status        MonitorStatus   @default(active)
+  hostinginfo   Json? // name kept identical to Mongo
+  lastResult    Json?
+  lastCheckedAt DateTime?
+  nextCheckAt   DateTime        @default(now())
+  runnerId      Int?
+  runner        UptimeRunner?   @relation(fields: [runnerId], references: [id], onDelete: SetNull)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  results UptimeResult[]
+
+  @@unique([userId, url])
+  // Scheduler: "active monitors that are due".
+  @@index([status, nextCheckAt])
+  @@index([runnerId])
+}
+
+model UptimeRunner {
+  id        Int             @id @default(autoincrement())
+  name      String          @unique @db.VarChar(255)
+  type      RunnerType
+  config    Json            @default("{}")
+  isActive  Boolean         @default(true)
+  isDefault Boolean         @default(false)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  monitors  UptimeMonitor[]
+}
+
+// Append-only, high volume. RETENTION: 30 days.
+// BigInt id: Prisma returns a JS `bigint`; convert before JSON.stringify.
+// For very large volumes, move to monthly range partitions on "checkedAt" and
+// drop old partitions instead of deleting rows.
+model UptimeResult {
+  id         BigInt        @id @default(autoincrement())
+  monitorId  Int
+  monitor    UptimeMonitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  userId     Int
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  result     Json
+  runnerName String?       @db.VarChar(255)
+  checkedAt  DateTime      @default(now())
+
+  @@index([monitorId, checkedAt(sort: Desc)])
+  @@index([userId, checkedAt(sort: Desc)])
+  @@index([checkedAt])
+}
+
+// -----------------------------------------------------------------------------
+// GUEST DEMO USAGE
+// One row per (guest, UTC day); the Mongo `history[]` array is a child table.
+// Increment atomically:
+//   prisma.guestDemoUsage.upsert({ ..., update: { count: { increment: 1 } } })
+// RETENTION: rows past `expiresAt` (children cascade).
+// -----------------------------------------------------------------------------
+
+model GuestDemoUsage {
+  id        Int      @id @default(autoincrement())
+  guestId   String   @db.VarChar(255)
+  day       String   @db.VarChar(10) // UTC day, YYYY-MM-DD
+  count     Int      @default(0) // CHECK (count >= 0) added in migration.sql
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  history GuestDemoUsageHistory[]
+
+  @@unique([guestId, day])
+  @@index([expiresAt])
+}
+
+model GuestDemoUsageHistory {
+  id            Int            @id @default(autoincrement())
+  usageId       Int
+  usage         GuestDemoUsage @relation(fields: [usageId], references: [id], onDelete: Cascade)
+  reservationId String?        @db.VarChar(255)
+  service       DemoService
+  url           String?        @db.VarChar(2048)
+  usedAt        DateTime       @default(now())
+
+  @@index([usageId])
+  @@index([reservationId])
+}
+
+// -----------------------------------------------------------------------------
+// ROLE AUDIT LOGS
+// -----------------------------------------------------------------------------
+
+model RoleAuditLog {
+  id        Int      @id @default(autoincrement())
+  actorId   Int
+  targetId  Int
+  action    String   @db.VarChar(50)
+  oldRole   Role
+  newRole   Role
+  ipAddress String?  @db.VarChar(45)
+  userAgent String?  @db.VarChar(500)
+  createdAt DateTime @default(now())
+
+  actor  User @relation("RoleAuditActor", fields: [actorId], references: [id], onDelete: Cascade)
+  target User @relation("RoleAuditTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([actorId])
+  @@index([targetId])
+  @@index([createdAt])
+}

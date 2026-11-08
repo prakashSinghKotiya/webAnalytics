@@ -1,25 +1,13 @@
-import mongoose from "mongoose";
-import { Ttfb } from "../Models/Ttfb.Model.js";
-import { Lighthouse } from "../Models/Lighthouse.Model.js";
-import { DnsRecord } from "../Models/dnsRecord.Model.js";
-import { RedirectCheck } from "../Models/redirectCheck.Model.js";
-import { WhoisLookup } from "../Models/whoisLookup.Model.js";
-
-const serviceModelMap = {
-  ttfb: Ttfb,
-  lighthouse: Lighthouse,
-  dns: DnsRecord,
-  dnsrecord: DnsRecord,
-  redirect: RedirectCheck,
-  whois: WhoisLookup,
-};
-
-const isValidObjectId = (id) =>
-  typeof id === "string" && mongoose.Types.ObjectId.isValid(id);
+import { prisma } from "../config/db.prismaSQL.js";
+import {
+  resolveJobAndDbId,
+  resolveServiceRecord,
+} from "../Services/jobIdResolver.Service.js";
 
 /**
  * Handles catchup requests when a client connects or reconnects.
  * Guarantees delivery even if the client connected after worker completed.
+ * Fully supports both PostgreSQL database integer IDs and pg-boss UUIDs.
  */
 export const handleSocketCatchup = async (socket, data) => {
   try {
@@ -41,19 +29,48 @@ export const handleSocketCatchup = async (socket, data) => {
 
     for (const item of requests) {
       const docId = item.id || item.jobId;
-      if (!isValidObjectId(docId)) continue;
+      if (!docId) continue;
 
-      let Model = item.service ? serviceModelMap[item.service.toLowerCase()] : null;
+      let serviceName = item.service ? item.service.toLowerCase() : null;
 
-      // If service is specified, query directly
-      if (Model) {
-        await checkAndEmitDoc(socket, Model, docId, item.service.toLowerCase(), userId, guestId, clientRoom);
-      } else {
-        // Query across models
-        for (const [svcName, M] of Object.entries(serviceModelMap)) {
-          const found = await checkAndEmitDoc(socket, M, docId, svcName, userId, guestId, clientRoom);
-          if (found) break;
+      // If service is unknown, resolve ID (checks pg-boss queue name if it is a UUID)
+      if (!serviceName) {
+        const res = await resolveJobAndDbId(docId);
+        if (res.service) {
+          serviceName = res.service;
         }
+      }
+
+      // Handle specific services
+      if (serviceName === "ttfb") {
+        await checkAndEmitTtfbDoc(socket, docId, userId, guestId, clientRoom);
+        continue;
+      }
+      if (serviceName === "dns" || serviceName === "dnsrecord") {
+        await checkAndEmitDnsDoc(socket, docId, userId, guestId, clientRoom);
+        continue;
+      }
+      if (serviceName === "whois") {
+        await checkAndEmitWhoisDoc(socket, docId, userId, guestId, clientRoom);
+        continue;
+      }
+      if (serviceName === "redirect" || serviceName === "redirects") {
+        await checkAndEmitRedirectDoc(socket, docId, userId, guestId, clientRoom);
+        continue;
+      }
+      if (serviceName === "lighthouse") {
+        await checkAndEmitLighthouseDoc(socket, docId, userId, guestId, clientRoom);
+        continue;
+      }
+
+      // Fallback if service still cannot be determined: try services sequentially
+      const { dbId } = await resolveJobAndDbId(docId);
+      if (dbId && !Number.isNaN(dbId)) {
+        if (await checkAndEmitTtfbDoc(socket, dbId, userId, guestId, clientRoom)) continue;
+        if (await checkAndEmitDnsDoc(socket, dbId, userId, guestId, clientRoom)) continue;
+        if (await checkAndEmitWhoisDoc(socket, dbId, userId, guestId, clientRoom)) continue;
+        if (await checkAndEmitRedirectDoc(socket, dbId, userId, guestId, clientRoom)) continue;
+        if (await checkAndEmitLighthouseDoc(socket, dbId, userId, guestId, clientRoom)) continue;
       }
     }
   } catch (err) {
@@ -61,118 +78,179 @@ export const handleSocketCatchup = async (socket, data) => {
   }
 };
 
-const checkAndEmitDoc = async (socket, Model, docId, serviceName, userId, guestId, clientRoom) => {
+const checkAndEmitTtfbDoc = async (socket, docId, userId, guestId, clientRoom) => {
   try {
-    const query = { _id: docId };
-    if (userId) {
-      query.userId = userId;
-    } else if (guestId) {
-      query.guestId = guestId;
-    }
-
-    const doc = await Model.findOne(query).lean();
+    const { doc } = await resolveServiceRecord({
+      service: "ttfb",
+      id: docId,
+      userId,
+      guestId,
+    });
     if (!doc) return false;
 
     if (doc.status === "completed" || doc.status === "failed") {
       const roomId = doc.roomId || clientRoom;
-
-      // Build service-specific payloads
-      switch (serviceName) {
-        case "ttfb": {
-          const payload = {
-            jobId: doc._id.toString(),
-            ttfbdbId: doc._id.toString(),
-            roomId,
-            region: doc.region,
-            result: doc.result,
-            status: doc.status,
-            error: doc.error || null,
-          };
-          socket.emit("ttfb:result", payload);
-          socket.emit("ttfbCompleted", payload);
-          break;
-        }
-        case "lighthouse": {
-          const payload = {
-            jobId: doc._id.toString(),
-            lighthousedbId: doc._id.toString(),
-            roomId,
-            result: doc.result,
-            status: doc.status,
-            error: doc.error || null,
-          };
-          socket.emit("lighthouse:result", payload);
-          socket.emit("lighthouseCompleted", payload);
-          socket.emit("Lighthouse-completed", payload);
-          break;
-        }
-        case "dns":
-        case "dnsrecord": {
-          const payload = {
-            jobId: doc._id.toString(),
-            dnsRecordId: doc._id.toString(),
-            roomId,
-            result: doc.result,
-            status: doc.status,
-            error: doc.error || null,
-          };
-          socket.emit("dns:result", payload);
-          if (doc.status === "completed") {
-            socket.emit("dnsRecordCompleted", payload);
-            socket.emit("dnsRecordCheck-completed", payload);
-          } else {
-            socket.emit("dnsRecordFailed", payload);
-            socket.emit("dnsRecordCheck-failed", payload);
-          }
-          break;
-        }
-        case "redirect": {
-          const payload = {
-            jobId: doc._id.toString(),
-            redirectCheckId: doc._id.toString(),
-            recordId: doc._id.toString(),
-            roomId,
-            result: doc.result,
-            status: doc.status,
-            error: doc.error || null,
-          };
-          socket.emit("redirect:result", payload);
-          if (doc.status === "completed") {
-            socket.emit("redirectCheckCompleted", payload);
-            socket.emit("redirect-completed", payload);
-          } else {
-            socket.emit("redirectCheckFailed", payload);
-            socket.emit("redirect-failed", payload);
-          }
-          break;
-        }
-        case "whois": {
-          const payload = {
-            jobId: doc._id.toString(),
-            whoisDbId: doc._id.toString(),
-            recordId: doc._id.toString(),
-            roomId,
-            result: doc.result,
-            status: doc.status,
-            error: doc.error || null,
-          };
-          socket.emit("whois:result", payload);
-          if (doc.status === "completed") {
-            socket.emit("whoisLookupCompleted", payload);
-            socket.emit("whoisLookup-completed", payload);
-          } else {
-            socket.emit("whoisLookupFailed", payload);
-            socket.emit("whoisLookup-failed", payload);
-          }
-          break;
-        }
-      }
+      const payload = {
+        jobId: `ttfb-${doc.id}`,
+        ttfbdbId: doc.id.toString(),
+        roomId,
+        region: doc.region,
+        result: doc.result,
+        status: doc.status,
+        error: doc.error || null,
+      };
+      socket.emit("ttfb:result", payload);
+      socket.emit("ttfbCompleted", payload);
       return true;
     }
-    return true; // Document found, but still processing/queued
+    return true;
   } catch (err) {
-    console.error(`[SocketCatchup] Error checking doc ${docId} for ${serviceName}:`, err.message);
+    console.error(`[SocketCatchup] Error checking TTFB doc ${docId}:`, err.message);
     return false;
   }
 };
 
+const checkAndEmitDnsDoc = async (socket, docId, userId, guestId, clientRoom) => {
+  try {
+    const { doc } = await resolveServiceRecord({
+      service: "dns",
+      id: docId,
+      userId,
+      guestId,
+    });
+    if (!doc) return false;
+
+    if (doc.status === "completed" || doc.status === "failed") {
+      const roomId = doc.roomId || clientRoom;
+      const payload = {
+        jobId: doc.id.toString(),
+        dnsRecordId: doc.id.toString(),
+        roomId,
+        result: doc.result,
+        status: doc.status,
+        error: doc.error || null,
+      };
+      socket.emit("dns:result", payload);
+      if (doc.status === "completed") {
+        socket.emit("dnsRecordCompleted", payload);
+        socket.emit("dnsRecordCheck-completed", payload);
+      } else {
+        socket.emit("dnsRecordFailed", payload);
+        socket.emit("dnsRecordCheck-failed", payload);
+      }
+      return true;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[SocketCatchup] Error checking DNS doc ${docId}:`, err.message);
+    return false;
+  }
+};
+
+const checkAndEmitWhoisDoc = async (socket, docId, userId, guestId, clientRoom) => {
+  try {
+    const { doc } = await resolveServiceRecord({
+      service: "whois",
+      id: docId,
+      userId,
+      guestId,
+    });
+    if (!doc) return false;
+
+    if (doc.status === "completed" || doc.status === "failed") {
+      const roomId = doc.roomId || clientRoom;
+      const payload = {
+        jobId: doc.id.toString(),
+        whoisDbId: doc.id.toString(),
+        recordId: doc.id.toString(),
+        roomId,
+        result: doc.result,
+        status: doc.status,
+        error: doc.error || null,
+      };
+      socket.emit("whois:result", payload);
+      if (doc.status === "completed") {
+        socket.emit("whoisLookupCompleted", payload);
+        socket.emit("whoisLookup-completed", payload);
+      } else {
+        socket.emit("whoisLookupFailed", payload);
+        socket.emit("whoisLookup-failed", payload);
+      }
+      return true;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[SocketCatchup] Error checking WHOIS doc ${docId}:`, err.message);
+    return false;
+  }
+};
+
+const checkAndEmitRedirectDoc = async (socket, docId, userId, guestId, clientRoom) => {
+  try {
+    const { doc } = await resolveServiceRecord({
+      service: "redirect",
+      id: docId,
+      userId,
+      guestId,
+    });
+    if (!doc) return false;
+
+    if (doc.status === "completed" || doc.status === "failed") {
+      const roomId = doc.roomId || clientRoom;
+      const payload = {
+        jobId: doc.id.toString(),
+        redirectCheckId: doc.id.toString(),
+        recordId: doc.id.toString(),
+        roomId,
+        result: doc.result,
+        status: doc.status,
+        error: doc.error || null,
+      };
+      socket.emit("redirect:result", payload);
+      if (doc.status === "completed") {
+        socket.emit("redirectCheckCompleted", payload);
+        socket.emit("redirect-completed", payload);
+      } else {
+        socket.emit("redirectCheckFailed", payload);
+        socket.emit("redirect-failed", payload);
+      }
+      return true;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[SocketCatchup] Error checking Redirect doc ${docId}:`, err.message);
+    return false;
+  }
+};
+
+const checkAndEmitLighthouseDoc = async (socket, docId, userId, guestId, clientRoom) => {
+  try {
+    const { doc } = await resolveServiceRecord({
+      service: "lighthouse",
+      id: docId,
+      userId,
+      guestId,
+    });
+    if (!doc) return false;
+
+    if (doc.status === "completed" || doc.status === "failed") {
+      const roomId = doc.roomId || clientRoom;
+      const payload = {
+        jobId: doc.id.toString(),
+        lighthousedbId: doc.id.toString(),
+        roomId,
+        result: doc.result,
+        status: doc.status,
+        error: doc.error || null,
+      };
+      socket.emit("lighthouse:result", payload);
+      socket.emit("lighthouseCompleted", payload);
+      socket.emit("Lighthouse-completed", payload);
+      return true;
+    }
+    return true;
+  } catch (err) {
+    console.error(`[SocketCatchup] Error checking Lighthouse doc ${docId}:`, err.message);
+    return false;
+  }
+};
