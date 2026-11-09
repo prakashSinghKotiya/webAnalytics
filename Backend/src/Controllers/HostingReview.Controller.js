@@ -51,6 +51,39 @@ const parseId = (raw) => {
   return Number.isInteger(id) && id > 0 ? id : null;
 };
 
+/**
+ * Safely parses and bounds pagination parameters from req.query.
+ * Handles negative values, non-numeric strings, and sets bounded defaults.
+ * Supports `all=true` or `paginate=false` to bypass pagination if required by admin dropdowns.
+ */
+export const parsePagination = (query = {}, defaultLimit = 10, maxLimit = 100) => {
+  const isAll = query?.all === 'true' || query?.paginate === 'false';
+  const page = Math.max(1, parseInt(query?.page, 10) || 1);
+  const limit = isAll
+    ? maxLimit
+    : Math.min(maxLimit, Math.max(1, parseInt(query?.limit, 10) || defaultLimit));
+  const skip = (page - 1) * limit;
+  return { page, limit, skip, isAll };
+};
+
+/**
+ * Builds standard compact pagination metadata.
+ */
+export const buildPagination = (total, page, limit, isAll = false) => {
+  const effectiveLimit = isAll ? (total || 1) : limit;
+  const totalPages = isAll ? (total > 0 ? 1 : 0) : (Math.ceil(total / effectiveLimit) || 0);
+  const currentPage = isAll ? 1 : page;
+
+  return {
+    page: currentPage,
+    limit: effectiveLimit,
+    total,
+    totalPages,
+    hasNextPage: isAll ? false : currentPage < totalPages,
+    hasPrevPage: isAll ? false : currentPage > 1,
+  };
+};
+
 /* ------------------------------------------------------------------ */
 /* Zod validation schemas                                              */
 /* ------------------------------------------------------------------ */
@@ -131,8 +164,11 @@ const headline = (stats) =>
  * GET /review/admin/providers
  * Lists all providers currently tracked by uptime monitors, with check counts,
  * eligibility flag, and whether a review already exists for each.
+ * Supports compact pagination (?page=1&limit=10) and filtering (?search=...&eligible=true/false&hasReview=true/false).
  */
-export const getAvailableProviders = wrap(async (_req, res) => {
+export const getAvailableProviders = wrap(async (req, res) => {
+  const { page, limit, skip, isAll } = parsePagination(req.query, 10, 100);
+
   const [providers, reviews] = await Promise.all([
     listProviders(),
     prisma.hostingReview.findMany({
@@ -140,10 +176,39 @@ export const getAvailableProviders = wrap(async (_req, res) => {
     }),
   ]);
   const byKey = new Map(reviews.map((r) => [r.providerKey, r]));
+  let list = providers.map((p) => ({ ...p, review: byKey.get(p.key) ?? null }));
+
+  // Optional search query (matches provider name or canonical key)
+  const search = String(req.query.search || req.query.q || '').trim().toLowerCase();
+  if (search) {
+    list = list.filter((p) =>
+      (p.name && p.name.toLowerCase().includes(search)) ||
+      (p.key && p.key.toLowerCase().includes(search))
+    );
+  }
+
+  // Optional eligibility filter (?eligible=true|false)
+  if (req.query.eligible === 'true') {
+    list = list.filter((p) => p.eligible === true);
+  } else if (req.query.eligible === 'false') {
+    list = list.filter((p) => p.eligible === false);
+  }
+
+  // Optional hasReview filter (?hasReview=true|false)
+  if (req.query.hasReview === 'true') {
+    list = list.filter((p) => p.review !== null);
+  } else if (req.query.hasReview === 'false') {
+    list = list.filter((p) => p.review === null);
+  }
+
+  const total = list.length;
+  const paginatedData = isAll ? list : list.slice(skip, skip + limit);
+
   res.json({
     success:   true,
     minChecks: MIN_CHECKS,
-    data:      providers.map((p) => ({ ...p, review: byKey.get(p.key) ?? null })),
+    data:      paginatedData,
+    pagination: buildPagination(total, page, limit, isAll),
   });
 });
 
@@ -160,17 +225,79 @@ export const previewProviderStats = wrap(async (req, res) => {
 /**
  * GET /review/admin/all
  * All reviews (published and draft) for the admin dashboard.
+ * Supports compact pagination (?page=1&limit=10), status filtering (?status=published|draft),
+ * search filtering (?search=...), and sorting (?sort=rating_desc|publishedAt_desc|updatedAt_asc).
  */
-export const getAllReviewsAdmin = wrap(async (_req, res) => {
-  const reviews = await prisma.hostingReview.findMany({
-    orderBy: { updatedAt: 'desc' },
-    select: {
-      id: true, providerKey: true, providerName: true, slug: true,
-      title: true, rating: true, isPublished: true, publishedAt: true,
-      statsUpdatedAt: true, updatedAt: true,
-    },
+export const getAllReviewsAdmin = wrap(async (req, res) => {
+  const { page, limit, skip, isAll } = parsePagination(req.query, 10, 100);
+
+  const status = String(req.query.status || '').toLowerCase().trim();
+  const publishedParam = req.query.published ?? req.query.isPublished;
+  let publishedFilter;
+  if (status === 'published' || publishedParam === 'true') {
+    publishedFilter = true;
+  } else if (status === 'draft' || status === 'unpublished' || publishedParam === 'false') {
+    publishedFilter = false;
+  }
+
+  const search = String(req.query.search || req.query.q || '').trim();
+
+  const where = {
+    ...(publishedFilter !== undefined ? { isPublished: publishedFilter } : {}),
+    ...(search
+      ? {
+          OR: [
+            { providerName: { contains: search, mode: 'insensitive' } },
+            { title: { contains: search, mode: 'insensitive' } },
+            { providerKey: { contains: search, mode: 'insensitive' } },
+          ],
+        }
+      : {}),
+  };
+
+  // Safe sorting
+  let orderBy = { updatedAt: 'desc' };
+  const sort = String(req.query.sort || '').toLowerCase().trim();
+  if (sort === 'rating_desc' || sort === 'rating:desc') {
+    orderBy = { rating: 'desc' };
+  } else if (sort === 'rating_asc' || sort === 'rating:asc') {
+    orderBy = { rating: 'asc' };
+  } else if (sort === 'publishedat_desc' || sort === 'publishedat:desc') {
+    orderBy = { publishedAt: 'desc' };
+  } else if (sort === 'publishedat_asc' || sort === 'publishedat:asc') {
+    orderBy = { publishedAt: 'asc' };
+  } else if (sort === 'updatedat_asc' || sort === 'updatedat:asc' || sort === 'oldest') {
+    orderBy = { updatedAt: 'asc' };
+  } else if (sort === 'provider_asc' || sort === 'providername_asc') {
+    orderBy = { providerName: 'asc' };
+  }
+
+  const [total, reviews] = await Promise.all([
+    prisma.hostingReview.count({ where }),
+    prisma.hostingReview.findMany({
+      where,
+      orderBy,
+      ...(isAll ? {} : { skip, take: limit }),
+      select: {
+        id: true,
+        providerKey: true,
+        providerName: true,
+        slug: true,
+        title: true,
+        rating: true,
+        isPublished: true,
+        publishedAt: true,
+        statsUpdatedAt: true,
+        updatedAt: true,
+      },
+    }),
+  ]);
+
+  res.json({
+    success: true,
+    data: reviews,
+    pagination: buildPagination(total, page, limit, isAll),
   });
-  res.json({ success: true, data: reviews });
 });
 
 /**
@@ -334,21 +461,61 @@ export const deleteReview = wrap(async (req, res) => {
  * GET /review
  * Public listing of all published reviews.
  * Returns only headline stats (not the full stats blob) to keep the payload small.
+ * Supports compact pagination (?page=1&limit=10), search filtering (?search=...),
+ * and sorting (?sort=rating_desc|publishedAt_desc|oldest|provider_asc).
  */
-export const getAllReviews = wrap(async (_req, res) => {
-  const reviews = await prisma.hostingReview.findMany({
-    where:   { isPublished: true },
-    orderBy: { publishedAt: 'desc' },
-    select: {
-      slug: true, providerName: true, title: true, rating: true,
-      publishedAt: true, stats: true, extra: true,
-    },
-  });
+export const getAllReviews = wrap(async (req, res) => {
+  const { page, limit, skip, isAll } = parsePagination(req.query, 10, 100);
+
+  const search = String(req.query.search || req.query.q || '').trim();
+  const where = {
+    isPublished: true,
+    ...(search
+      ? {
+          OR: [
+            { providerName: { contains: search, mode: 'insensitive' } },
+            { title: { contains: search, mode: 'insensitive' } },
+          ],
+        }
+      : {}),
+  };
+
+  // Safe sorting
+  let orderBy = { publishedAt: 'desc' };
+  const sort = String(req.query.sort || '').toLowerCase().trim();
+  if (sort === 'rating_desc' || sort === 'rating:desc') {
+    orderBy = { rating: 'desc' };
+  } else if (sort === 'rating_asc' || sort === 'rating:asc') {
+    orderBy = { rating: 'asc' };
+  } else if (sort === 'oldest' || sort === 'publishedat_asc' || sort === 'publishedat:asc') {
+    orderBy = { publishedAt: 'asc' };
+  } else if (sort === 'provider_asc' || sort === 'providername_asc') {
+    orderBy = { providerName: 'asc' };
+  }
+
+  const [total, reviews] = await Promise.all([
+    prisma.hostingReview.count({ where }),
+    prisma.hostingReview.findMany({
+      where,
+      orderBy,
+      ...(isAll ? {} : { skip, take: limit }),
+      select: {
+        slug: true,
+        providerName: true,
+        title: true,
+        rating: true,
+        publishedAt: true,
+        stats: true,
+        extra: true,
+      },
+    }),
+  ]);
 
   res.set('Cache-Control', 'public, max-age=60');
   res.json({
     success: true,
-    data:    reviews.map(({ stats, ...r }) => ({ ...r, headline: headline(stats) })),
+    data: reviews.map(({ stats, ...r }) => ({ ...r, headline: headline(stats) })),
+    pagination: buildPagination(total, page, limit, isAll),
   });
 });
 

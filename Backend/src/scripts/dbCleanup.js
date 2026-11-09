@@ -15,8 +15,8 @@ try {
 
   // Execute CALL as a standalone statement.
   await client.query(
-  "SELECT public.cleanup_expired_rows(10000)"
-);
+    "SELECT public.cleanup_expired_rows(10000)"
+  );
 
   console.log("Database cleanup completed successfully.");
 } catch (error) {

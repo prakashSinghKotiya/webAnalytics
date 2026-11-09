@@ -17,8 +17,10 @@
     "worker:whois": "node --watch --no-deprecation --env-file=.env src/Workers/whoisStart.worker.js",
     "admin:provision": "node --env-file=.env src/scripts/provisionSuperAdmin.js",
     "seed:runners": "node --env-file=.env src/scripts/seedRunners.js",
-    "test": "node --env-file=.env --test test/superAdmin.test.js test/uptimeBatch.test.js test/adminRunnersApi.test.js test/userRunnerIsolation.test.js",
-    "test:uptime": "node --env-file=.env --test test/uptimeBatch.test.js"
+    "test": "node --env-file=.env --test test/superAdmin.test.js test/uptimeBatch.test.js test/adminRunnersApi.test.js test/userRunnerIsolation.test.js test/hostingReviewPagination.test.js test/contact.test.js",
+    "test:uptime": "node --env-file=.env --test test/uptimeBatch.test.js",
+    "test:review": "node --env-file=.env --test test/hostingReviewPagination.test.js",
+    "test:contact": "node --env-file=.env --test test/contact.test.js"
   },
   "dependencies": {
     "@aws-sdk/client-lambda": "^3.1161.0",

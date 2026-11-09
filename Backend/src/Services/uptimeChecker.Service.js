@@ -1,17 +1,3 @@
-/**
- * Uptime checker
- * --------------
- * - Zero dependencies: only Node.js built-ins, no third-party APIs
- * - One hard deadline per attempt (DNS + connect + TLS + response body)
- * - Real DNS / TCP / TTFB timings (no estimates)
- * - Retries only for transient failures, with jittered linear backoff
- * - SSRF protection (blocks private/reserved IPs, DNS-rebinding safe)
- * - Optional keyword assertion and AbortSignal support
- * - checkUrl() NEVER rejects and keeps no shared state, so it scales
- *   horizontally; bound concurrency in your scheduler/queue.
- *
- * Requires Node.js >= 18.
- */
 
 import dns from "node:dns";
 import http from "node:http";

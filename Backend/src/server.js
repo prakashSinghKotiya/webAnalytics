@@ -16,6 +16,7 @@ import DnsRecordRoutes from './Routes/dnsRecord.Routes.js';
 import RedirectCheckRoutes from './Routes/redirectCheck.Routes.js';
 import WhoisLookupRoutes from './Routes/whoisLookup.Routes.js';
 import Hostingreview from "./Routes/Hostingreview.Routes.js";
+import ContactRoutes from "./Routes/Contact.Routes.js";
 
 import { connectprismaSQLdb, prisma } from './config/db.prismaSQL.js';
 import { resolveServiceRecord } from './Services/jobIdResolver.Service.js';
@@ -204,6 +205,8 @@ app.get('/demo/status/:service/:id', optionalActor, async (req, res) => {
 
 
 app.use("/review", Hostingreview);
+app.use("/api/contact", ContactRoutes);
+app.use("/contact", ContactRoutes);
 
 
 

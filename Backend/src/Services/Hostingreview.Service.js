@@ -1,20 +1,9 @@
-/**
- * Hosting statistics service.
- *
- * Derives provider-level uptime/performance stats from UptimeMonitor.hostinginfo
- * and UptimeResult.result (JSON: { status: 'UP'|'DOWN', responseTime, httpStatus }).
- *
- * PostgreSQL 10 compatible:
- *  - No FILTER clause on ordered-set aggregates (percentile_cont)
- *  - No FILTER clause on window functions
- *  - Uses CASE WHEN for conditional aggregation on percentiles
- *  - Uses explicit Prisma.sql array interpolation (not ::int[] cast on JS array)
- */
+
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db.prismaSQL.js';
 
 /** Minimum checks required before a provider can be reviewed. */
-export const MIN_CHECKS = 1;
+export const MIN_CHECKS = 100;
 
 /** UptimeResult retention window — matches the DB cleanup policy. */
 const RETENTION_DAYS = 30;

@@ -30,7 +30,7 @@ ALTER TABLE "OTP"
 -- It must be invoked outside an explicit transaction block:
 --   CALL cleanup_expired_rows();
 --
--- Cutoff rule per table: "<column>" < now() - <grace>
+-- Cutoff rule per table: "<column>" < now() - <grace> 
 --   createdAt tables use their retention window as <grace>
 --   expiresAt tables use 0 (delete once expired)
 

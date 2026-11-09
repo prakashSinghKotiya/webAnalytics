@@ -81,6 +81,14 @@ enum RunnerType {
   http
 }
 
+enum EnquiryTopic {
+  support
+  enterprise
+  feature
+  billing
+  general
+}
+
 // -----------------------------------------------------------------------------
 // AUTH / USER
 // -----------------------------------------------------------------------------
@@ -411,3 +419,22 @@ model RoleAuditLog {
   @@index([targetId])
   @@index([createdAt])
 }
+
+// -----------------------------------------------------------------------------
+// CONTACT US MESSAGES (public submission, admin read-only)
+// Independent of user accounts (no relation to User).
+// -----------------------------------------------------------------------------
+
+model ContactMessage {
+  id           String       @id @default(uuid()) @db.Uuid
+  name         String       @db.VarChar(100)
+  email        String       @db.VarChar(320)
+  enquiryTopic EnquiryTopic
+  message      String       @db.Text
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @default(now()) @updatedAt
+
+  @@index([createdAt(sort: Desc)])
+  @@index([enquiryTopic, createdAt(sort: Desc)])
+}
+

@@ -55,3 +55,38 @@ export const forgotPasswordSchema = z.object({
     password: newPasswordSchema.optional(),
     newPassword: newPasswordSchema.optional(),
 });
+
+export const ALLOWED_ENQUIRY_TOPICS = [
+  "support",
+  "enterprise",
+  "feature",
+  "billing",
+  "general",
+];
+
+export const contactMessageSchema = z.object({
+  name: z
+    .string({ required_error: "Name is required" })
+    .trim()
+    .min(1, "Name cannot be empty")
+    .max(100, "Name cannot exceed 100 characters")
+    .transform((val) => purify.sanitize(val, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] }).trim())
+    .refine((val) => val.length > 0, { message: "Name cannot be empty" }),
+  email: emailSchema,
+  enquiryTopic: z.preprocess(
+    (val) => (typeof val === "string" ? val.trim().toLowerCase() : val),
+    z.enum(ALLOWED_ENQUIRY_TOPICS, {
+      errorMap: () => ({
+        message: "Invalid enquiry topic. Allowed topics: support, enterprise, feature, billing, general",
+      }),
+    })
+  ),
+  message: z
+    .string({ required_error: "Message is required" })
+    .trim()
+    .min(1, "Message cannot be empty")
+    .max(5000, "Message cannot exceed 5000 characters")
+    .transform((val) => purify.sanitize(val, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] }).trim())
+    .refine((val) => val.length > 0, { message: "Message cannot be empty" }),
+});
+
