@@ -44,7 +44,7 @@ app.use(express.json());
 const defaultAllowedOrigins = [
   'https://monitormyhost.com',
   'https://www.monitormyhost.com',
-  'https://webpulse.monitormyhost.com',
+  'https://dashboard.monitormyhost.com',
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
@@ -63,7 +63,7 @@ export const isOriginAllowed = (origin) => {
   return (
     allowedOrigins.includes(normalized) ||
     allowedOrigins.includes('*') ||
-    /^https:\/\/(www\.|webpulse\.)?monitormyhost\.com$/i.test(normalized)
+    /^https:\/\/(www\.|dashboard\.)?monitormyhost\.com$/i.test(normalized)
   );
 };
 

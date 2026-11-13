@@ -25,12 +25,12 @@ export async function sendOtp(email) {
   });
 
   const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false,
+    host: "mail.monitormyhost.com",
+    port: 465,
+    secure: true,
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+      user: process.env.EMAIL_USER_OTP,
+      pass: process.env.EMAIL_PASS_OTP,
     },
   });
 
@@ -42,9 +42,9 @@ export async function sendOtp(email) {
   `;
 
   const info = await transporter.sendMail({
-    from: "web analytics  <prakashkotya100@gmail.com>",
+    from: `MonitorMyHost  <${process.env.EMAIL_USER_OTP}>`,
     to: email,
-    subject: "web analytics  otp",
+    subject: "MonitorMyHost  otp",
     html,
   });
 
@@ -82,9 +82,9 @@ export async function sendSiteDownEmail(paramsOrTo, maybeUrl, maybeResult) {
   const normalizedEmail = (Array.isArray(to) ? to.join(",") : to).trim().toLowerCase();
 
   // If email credentials are not configured in environment, safely skip with warning
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+  if (!process.env.EMAIL_USER_UPTIME || !process.env.EMAIL_PASS_UPTIME) {
     console.warn(
-      `[sendSiteDownEmail] EMAIL_USER or EMAIL_PASS not set in environment. Skipping email alert to ${normalizedEmail} for ${url}.`
+      `[sendSiteDownEmail] EMAIL_USER_UPTIME or EMAIL_PASS_UPTIME not set in environment. Skipping email alert to ${normalizedEmail} for ${url}.`
     );
     return {
       success: false,
@@ -94,18 +94,18 @@ export async function sendSiteDownEmail(paramsOrTo, maybeUrl, maybeResult) {
   }
 
   const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 587,
-    secure: false,
+    host: "mail.monitormyhost.com",
+    port: 465,
+    secure: true,
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+      user: process.env.EMAIL_USER_UPTIME,
+      pass: process.env.EMAIL_PASS_UPTIME,
     },
   });
 
   const failureReason = result?.reason || (result?.httpStatus ? `HTTP ${result.httpStatus}` : "UNREACHABLE");
   const httpCodeText = result?.httpStatus ? ` (HTTP ${result.httpStatus})` : "";
-  const subject = `🚨 Uptime Alert: ${url} is DOWN${httpCodeText} - Web Analytics`;
+  const subject = `🚨 Uptime Alert: ${url} is DOWN${httpCodeText} - MonitorMyHost`;
 
   const formattedDate = new Date(checkedAt).toUTCString();
   const errorDetails = result?.error || result?.reason || "Connection Timeout / Unreachable";
@@ -238,7 +238,7 @@ export async function sendSiteDownEmail(paramsOrTo, maybeUrl, maybeResult) {
           <!-- Footer -->
           <tr>
             <td style="background-color: #f9fafb; padding: 16px 30px; text-align: center; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
-              Web Analytics Uptime Robot &bull; Automated Monitoring
+              MonitorMyHost Uptime Robot &bull; Automated Monitoring
             </td>
           </tr>
         </table>
@@ -258,11 +258,11 @@ Error: ${errorDetails}
 Checked At: ${formattedDate}
 
 Please check your web server and hosting provider.
-Web Analytics Monitoring
+MonitorMyHost Monitoring
   `.trim();
 
   try {
-    const fromAddress = `Web Analytics <${process.env.EMAIL_USER || "prakashkotya100@gmail.com"}>`;
+    const fromAddress = `MonitorMyHost <${process.env.EMAIL_USER_UPTIME }>`;
     const info = await transporter.sendMail({
       from: fromAddress,
       to: normalizedEmail,
